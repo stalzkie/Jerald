@@ -523,9 +523,9 @@ Jerald earns trust through published validation and a one-command CI gate; reven
 | --- | --- | --- |
 | [EvalView](https://pypi.org/project/evalview/) | Golden-baseline diffs of agent trajectories, PR comments, pass@k runs, canaries, record and replay; Apache-2.0, version 0.8.1 (July 2026) | Task-clustered paired statistics, a measured noise profile, factor attribution, fault-injection curves |
 | [AgentAssay](https://arxiv.org/abs/2603.02601) | Research framework with three-valued verdicts, sequential testing, behavioral fingerprints, adaptive budgets | Published error rates on reference agents, bisect and factorial attribution, a simple adoption path |
-| DeepEval, Promptfoo, Inspect AI | Metric libraries, YAML CI gating, and an agent evaluation framework | A degradation-first workflow built around baselines, noise, and verdicts |
+| DeepEval, Promptfoo, Inspect AI | Full eval frameworks, broader than a single phrase: DeepEval is a pytest-style LLM/agent test framework with agentic metrics; Promptfoo is an LLM eval platform that also does red-teaming and security scanning; Inspect AI is a general-purpose LLM evaluation framework, not agent-specific | A degradation-first workflow built around baselines, noise, and verdicts |
 
-Only the EvalView and AgentAssay entries were checked against their primary pages; verify the rest, and the "What Jerald adds" column, against current documentation before relying on them.
+All four entries have been checked against their primary sources (see `research/spec-claims-verification.md`); the "What Jerald adds" column remains Jerald's own positioning claim, not a verified fact, and should be revisited if any of these tools ships paired statistics or attribution.
 
 ### Distribution
 
@@ -566,7 +566,7 @@ Decide these now, so the project does not talk itself into continuing:
 
 ### Open questions
 
-- **Name.** PyPI returned 404 for `jerald` on 2026-10-05, and a web search found no agent tool with that name. GitHub, npm, and trademark were not checked.
+- **Name.** PyPI returned 404 for `jerald` on 2026-10-05 (reconfirmed live against PyPI's JSON API). GitHub has no repo or active org named `jerald`/`jerald-cli`, npm has no package named `jerald`, and a trademark/web sanity check found no commercial software, AI, or dev-tools product using the name. One caveat: the GitHub handle `jerald-ai` is already taken by an unrelated, inactive account — use `jerald-cli` or similar if an exact-match org name is wanted.
 - **Default margin.** Keep 3 pp, or derive it from each suite's noise profile?
 - **Judge scores.** Should a calibrated judge ever be allowed to gate?
 - **First adapters.** Which agent frameworks come first after HTTP and CLI?
