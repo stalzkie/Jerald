@@ -12,3 +12,4 @@ dist/
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
+.claude/
