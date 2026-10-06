@@ -1,6 +1,6 @@
 # Jerald — progress log
 
-Status snapshot for picking this back up. Last updated 2026-10-06, after 24 commits on `main`
+Status snapshot for picking this back up. Last updated 2026-10-06, after 25 commits on `main`
 (pushed to [github.com/stalzkie/Jerald](https://github.com/stalzkie/Jerald), CI green on
 Python 3.11/3.12/3.13 throughout).
 
@@ -71,8 +71,9 @@ confirmed or overridden.
 
 | Trajectory Scorer | `src/jerald/scorers/trajectory.py` | 10 | First slice of the Trajectory family (design note in `docs/design/scorer-and-statistics.md`): one `trajectory()` factory checking `tool_called`/`tool_not_called`/`args_match` together with AND semantics — matches the spec's own suite YAML example, which bundles all three as co-equal keys on *one* `type: trajectory` scorer entry, not three separate scorer types. `args_match` does partial-key equality on the `tool_called` step's `args` (not the spec's named "JSONPath predicate" — no JSONPath library exists anywhere in this project, and the example never needs more than equality). Raises `ValueError` at construction with none of the three keys given — same fail-fast invariant as `regex`'s bad pattern. `tool_order`/`no_loops`/`forbidden_effects`/`asked_clarification` stay unbuilt: nothing demonstrates their shape the way the spec's example demonstrates these three. |
 | Suite loader (`trajectory`) | `src/jerald/suite/loader.py` | +2 | Registered `type: trajectory` in the scorer factory map. The existing "unsupported scorer type" test now exercises `type: state` instead, since `trajectory` is no longer one of the unsupported ones. |
+| Efficiency Scorer | `src/jerald/scorers/efficiency.py` | 10 | First slice of the Efficiency family (design note in `docs/design/scorer-and-statistics.md`): `efficiency()` bundles `max_steps`/`max_cost_usd`/`max_latency_s` on one `type: efficiency` scorer entry, matching the spec's own example (`max_steps: 12, max_cost_usd: 0.05` on one entry). `max_steps`/`max_cost_usd` check `len(trajectory)`/`usage.cost_usd` directly; `max_latency_s` is derived as `max(t_end) - min(t_start)` across the trajectory's `Step`s, since `TrialResult` has no latency field of its own. Same fail-fast-with-no-keys invariant as `trajectory()`. Registered in the suite loader's scorer factory map; `type: efficiency` is no longer unsupported. |
 
-**126 tests total (1 skipped on win32), all passing.** `ruff check .` clean.
+**138 tests total (1 skipped on win32), all passing.** `ruff check .` clean.
 
 ## Open decisions (never formally confirmed — currently running on my recommendations)
 
@@ -105,13 +106,13 @@ here:
    yet (what MCP client library, what transport, how `JERALD_TOOL_BASE_URL` fault injection
    applies to MCP tool calls specifically). Both loaders already raise a clear "not implemented
    yet" error for `type: mcp`, so adding it is additive once designed.
-3. **Efficiency/state/judge Scorer families, and the rest of Trajectory** (`tool_order`,
-   `no_loops`, `forbidden_effects`, `asked_clarification`) — the suite loader already raises a
-   clear "not implemented yet" error for these `type:` values, so adding one is additive: a new
-   entry in the loader's scorer factory registry plus the Scorer implementation itself.
-   Efficiency (`max_steps`/`max_cost_usd`/`max_latency_s`) is probably next in line — it only
-   needs `TrialResult.usage` and trajectory length, both of which already exist, no new data
-   to thread through anything first.
+3. **`state`/judge Scorer families, and the rest of Trajectory** (`tool_order`, `no_loops`,
+   `forbidden_effects`, `asked_clarification`) — the suite loader already raises a clear "not
+   implemented yet" error for these `type:` values, so adding one is additive: a new entry in
+   the loader's scorer factory registry plus the Scorer implementation itself. `state` needs a
+   design decision first (the spec's example checks a SQL query against sandbox fixtures —
+   there's no sandbox/fixture layer in this project at all yet, so `state` may be blocked on
+   that rather than being a quick addition like `trajectory`/`efficiency` were).
 4. **The rest of the CLI surface** — `jerald init`, `doctor`, `calibrate`, `plan`, `attribute`,
    `bisect`, `canary`, `stress`, `report`, `capture`, `replay`, `purge`, plus `compare`'s own
    deferred flags (`--max-trials`/`--fixed-n`, needing the sequential engine; `--budget-usd`,

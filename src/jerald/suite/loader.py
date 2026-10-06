@@ -10,6 +10,7 @@ import yaml
 from jerald.adapters.base import TaskSpec
 from jerald.orchestrator.core import Task
 from jerald.scorers.base import Scorer
+from jerald.scorers.efficiency import efficiency
 from jerald.scorers.outcome import exact, json_schema, regex
 from jerald.scorers.trajectory import trajectory
 
@@ -99,6 +100,12 @@ _SCORER_FACTORIES: Mapping[str, Any] = {
         tool_called=cfg.get("tool_called"),
         tool_not_called=cfg.get("tool_not_called"),
         args_match=cfg.get("args_match"),
+        required=required,
+    ),
+    "efficiency": lambda cfg, required: efficiency(
+        max_steps=cfg.get("max_steps"),
+        max_cost_usd=cfg.get("max_cost_usd"),
+        max_latency_s=cfg.get("max_latency_s"),
         required=required,
     ),
 }

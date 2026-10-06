@@ -99,6 +99,21 @@ them as `trajectory()` keys since they're unbuilt. Constructing `trajectory()` w
 three keys raises `ValueError` at construction time, same fail-fast invariant as `regex`'s bad
 pattern — a scorer with nothing to check is a suite-authoring mistake, not a valid vacuous pass.
 
+### Efficiency family
+
+Same shape again: `src/jerald/scorers/efficiency.py`'s `efficiency()` factory bundles
+`max_steps`/`max_cost_usd`/`max_latency_s` as co-equal keys on one `type: efficiency` scorer
+entry (the spec's own example does exactly this — `max_steps: 12`, `max_cost_usd: 0.05` on one
+entry), AND-combined, same "at least one key, else `ValueError` at construction" invariant as
+`trajectory()`. `max_steps` checks `len(trial.trajectory)`; `max_cost_usd` checks
+`trial.usage.cost_usd` — both already-populated fields, no new data needed. `max_latency_s` is
+the one derived value: `TrialResult` has no latency field of its own, only per-`Step`
+`t_start`/`t_end`, so latency is computed as `max(t_end) - min(t_start)` across the trajectory —
+the simplest sensible reading of "how long did this trial take" from data already on hand, not a
+new concept bolted on. `max_latency_s`/`max_cost_usd` are real resource limits now checkable
+in-process, since `Adapter.run_trial` already returns populated `Usage` and timed `Step`s for
+every production adapter built so far.
+
 ---
 
 ## Statistics engine (fixed-n paired comparison)

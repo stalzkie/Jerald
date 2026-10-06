@@ -133,6 +133,30 @@ def test_load_suite_raises_when_trajectory_scorer_has_no_conditions(tmp_path: Pa
         load_suite(_write(tmp_path, text))
 
 
+def test_load_suite_builds_a_working_efficiency_scorer(tmp_path: Path) -> None:
+    text = _WELL_FORMED.replace(
+        "      - type: exact\n        expected: 'Refunded order 4412.'\n",
+        "      - type: efficiency\n        max_steps: 1\n        required: false\n",
+    )
+    suite = load_suite(_write(tmp_path, text))
+
+    scorer = suite.tasks[0].scorers[0]
+    step = Step(type="tool_call", name="noop", args=None, result=None, error=None,
+                t_start=0.0, t_end=0.1)
+    result = scorer.score(_trial_with_trajectory([step, step]))
+    assert result.passed is False
+    assert result.required is False
+
+
+def test_load_suite_raises_when_efficiency_scorer_has_no_conditions(tmp_path: Path) -> None:
+    text = _WELL_FORMED.replace(
+        "      - type: exact\n        expected: 'Refunded order 4412.'\n",
+        "      - type: efficiency\n",
+    )
+    with pytest.raises(SuiteLoadError, match="at least one"):
+        load_suite(_write(tmp_path, text))
+
+
 def test_load_suite_raises_on_invalid_yaml_syntax(tmp_path: Path) -> None:
     with pytest.raises(SuiteLoadError):
         load_suite(_write(tmp_path, "suite: [unterminated"))
