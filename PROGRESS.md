@@ -1,6 +1,6 @@
 # Jerald — progress log
 
-Status snapshot for picking this back up. Last updated 2026-10-06, after 22 commits on `main`
+Status snapshot for picking this back up. Last updated 2026-10-06, after 23 commits on `main`
 (pushed to [github.com/stalzkie/Jerald](https://github.com/stalzkie/Jerald), CI green on
 Python 3.11/3.12/3.13 throughout).
 
@@ -66,9 +66,10 @@ confirmed or overridden.
 | `jerald compare --store` | `src/jerald/cli.py` | 2 | Wired `compare` to the store: `--store PATH` persists the run and prints `run_id: <uuid>`; omitted, nothing is written — opt-in, since a default path under the CWD would mean `compare` silently writes a file next to wherever it's invoked. Closes the loop the spec names directly: "every verdict can be traced to its trials." |
 | `jerald run` | `src/jerald/cli.py` | 7 | Second real, end-to-end command. `--arm {baseline,candidate}` (default `baseline`) selects which `configs:` entry to run — not a spec-named flag (there's no `jerald baseline`/`init` yet to otherwise supply a default Configuration), added because *something* has to pick one. `--trials N` overrides the suite's `defaults.trials` (spec-named, `run`-specific). Unlike `compare`, `--store` is **required**, not opt-in: per the spec, storing trials is the entire point of `run`; a run that persists nothing would do nothing useful. `--dry-run` still works without `--store` (nothing to persist when nothing runs). No `Verdict` to print or map to an exit code — prints each task's pass count instead, always exits 0 on success (agent failures are data, not a CLI failure, same principle as "never retried because they are the data"). Manually smoke-tested against the real installed `jerald` console command, not just `CliRunner`. |
 | Store `baselines` | `src/jerald/store/store.py` | 4 | `save_baseline`/`get_baseline`/`list_baselines` on top of a new `baselines` table (`name` PRIMARY KEY, `run_id`, `saved_at`) — a thin name→run_id pointer, not a spec-named table. `save_baseline` is `INSERT OR REPLACE`: re-saving a name moves what it points to, matching "main" meaning *the current* main, not a history. Scoped globally within one store file, not per-project (documented, accepted limitation — one store file per project is the only setup this CLI produces). |
-| `jerald baseline save/list/show` | `src/jerald/cli.py` | 9 | Third real, end-to-end command — a `click.group()` with three subcommands. `save NAME` runs the baseline Arm (same machinery as `jerald run --arm baseline`) and names the resulting run; re-saving the same `NAME` replaces it. `list` prints every saved baseline, most-recently-saved first, or "No baselines saved." `show NAME` prints the Configuration's project/suite/seed plus per-task pass counts, or exits 3 naming the unknown baseline. `--suite`/`--store` on `save` are both required (checked manually, same exit-code-3 pattern as `compare`/`run`). Manually smoke-tested end-to-end against the real installed `jerald` console command. This is what the spec's "typical first session" calls directly after `plan`, before `jerald check --baseline main` — which is next. |
+| `jerald baseline save/list/show` | `src/jerald/cli.py` | 9 | Third real, end-to-end command — a `click.group()` with three subcommands. `save NAME` runs the baseline Arm (same machinery as `jerald run --arm baseline`) and names the resulting run; re-saving the same `NAME` replaces it. `list` prints every saved baseline, most-recently-saved first, or "No baselines saved." `show NAME` prints the Configuration's project/suite/seed plus per-task pass counts, or exits 3 naming the unknown baseline. `--suite`/`--store` on `save` are both required (checked manually, same exit-code-3 pattern as `compare`/`run`). Manually smoke-tested end-to-end against the real installed `jerald` console command. This is what the spec's "typical first session" calls directly after `plan`, before `jerald check --baseline main`. |
+| `jerald check` | `src/jerald/cli.py` | 8 | Fourth real, end-to-end command — the spec calls this "the command most people run." Runs the **candidate** Arm fresh via `run_single`; the **baseline** side is read from `store.get_baseline(name)`, not re-run — a real baseline comparison shouldn't re-spend trials on a result already saved. Calls `compare()` *directly* with both sides' per-task bool lists (not `Orchestrator.run_comparison`, which needs two live Arms to pair seeds between — here one side is already-stored data, so there's nothing to pair against at call time). Catches the suite-drifted-since-baseline-was-saved case explicitly: if the current suite's task set doesn't match the baseline's, exits 3 naming exactly which task ids are missing/extra, instead of letting `compare()`'s bare `ValueError` escape as a traceback. `--baseline`/`--suite`/`--store` are all required (manual checks, same exit-3 pattern); `--store` doubles as where the baseline is read from *and* where this check's own run (`kind="check"`) gets saved. `--budget-usd`/`--format` from the spec's flag list are not implemented (no cost tracking, no report renderer beyond plain text + `--out` JSON). Manually smoke-tested end-to-end against the real installed `jerald` console command, confirming exit code 1 on a real regression. |
 
-**106 tests total (1 skipped on win32), all passing.** `ruff check .` clean.
+**114 tests total (1 skipped on win32), all passing.** `ruff check .` clean.
 
 ## Open decisions (never formally confirmed — currently running on my recommendations)
 
@@ -88,28 +89,23 @@ release, a README, a announcement) happens.
 
 ## What's next
 
-In rough dependency order:
+All four core commands named across the spec's "typical first session" are now built and wired
+end-to-end: `compare`, `run`, `baseline save/list/show`, `check`. In rough dependency order from
+here:
 
-1. **`jerald check`** — now unblocked: "compare the working tree with a named baseline and set
-   the exit code" — the spec calls this "the command most people run." Needs `load_config` +
-   `load_suite` + `store.get_baseline(name)` for the stored side, run the candidate Arm fresh
-   for the live side, then feed both into `compare()` *directly* (not
-   `Orchestrator.run_comparison`, since the baseline side is already-stored per-task bool
-   lists, not a live Arm to call `run_trial` against — `compare()` takes exactly that shape
-   already, so this is a direct call, not a new engine). Exit codes 0/1/2 same as `compare`.
-2. **Per-provider concurrency caps** — the Orchestrator currently takes one global
+1. **Per-provider concurrency caps** — the Orchestrator currently takes one global
    `max_concurrency`; splitting it per-provider needs the config loader to carry which
    provider each Arm's Adapter talks to, which it doesn't today (one Adapter, shared by both
    Arms — there's only ever one provider per comparison in this slice).
-3. **`McpAdapter`** — the fourth production adapter named in the spec and in
+2. **`McpAdapter`** — the fourth production adapter named in the spec and in
    `docs/design/adapter-contract.md`'s registry note; not started, no design work done on it
    yet (what MCP client library, what transport, how `JERALD_TOOL_BASE_URL` fault injection
    applies to MCP tool calls specifically). Both loaders already raise a clear "not implemented
    yet" error for `type: mcp`, so adding it is additive once designed.
-4. **Trajectory/efficiency/state/judge Scorer families** — the suite loader already raises a
+3. **Trajectory/efficiency/state/judge Scorer families** — the suite loader already raises a
    clear "not implemented yet" error for these `type:` values, so adding one is additive: a new
    entry in the loader's scorer factory registry plus the Scorer implementation itself.
-5. **The rest of the CLI surface** — `jerald init`, `doctor`, `calibrate`, `plan`, `attribute`,
+4. **The rest of the CLI surface** — `jerald init`, `doctor`, `calibrate`, `plan`, `attribute`,
    `bisect`, `canary`, `stress`, `report`, `capture`, `replay`, `purge`, plus `compare`'s own
    deferred flags (`--max-trials`/`--fixed-n`, needing the sequential engine; `--budget-usd`,
    needing cost tracking) — all intentionally deferred past the narrow MVP slice.

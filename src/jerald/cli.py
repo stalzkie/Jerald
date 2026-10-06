@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -8,8 +9,9 @@ import click
 
 from jerald import __version__
 from jerald.adapters.base import AdapterInfrastructureError
+from jerald.analysis.compare import compare as run_compare
 from jerald.config.loader import ConfigLoadError, load_config
-from jerald.orchestrator.core import Arm, Orchestrator
+from jerald.orchestrator.core import Arm, Orchestrator, TrialRecord
 from jerald.store.store import Store
 from jerald.suite.loader import SuiteLoadError, load_suite
 
@@ -423,11 +425,174 @@ def baseline_show(ctx: click.Context, name: str, store_path: Path) -> None:
     click.echo(f"seed: {stored.seed}")
     click.echo(f"saved: {stored.ended_at.isoformat()}")
 
-    per_task: dict[str, list[bool]] = {}
-    for r in stored.trials:
-        per_task.setdefault(r.task_id, []).append(r.passed)
-    for task_id, scores in per_task.items():
+    for task_id, scores in _scores_by_task(stored.trials).items():
         click.echo(f"{task_id}: {sum(scores)}/{len(scores)} passed")
+
+
+def _scores_by_task(trials: Sequence[TrialRecord]) -> dict[str, list[bool]]:
+    scores: dict[str, list[bool]] = {}
+    for r in trials:
+        scores.setdefault(r.task_id, []).append(r.passed)
+    return scores
+
+
+@main.command()
+@click.option(
+    "--baseline", "baseline_name", default=None,
+    help="Name of the saved baseline to compare the candidate against.",
+)
+@click.option(
+    "--config", "config_path", default="jerald.yaml", show_default=True,
+    type=click.Path(path_type=Path), help="Path to jerald.yaml.",
+)
+@click.option(
+    "--suite", "suite_path", default=None,
+    type=click.Path(path_type=Path), help="Path to the suite YAML file.",
+)
+@click.option("--margin-pp", default=None, type=float, help="Override the config's margin_pp.")
+@click.option("--alpha", default=None, type=float, help="Override the config's alpha.")
+@click.option("--seed", default=0, type=int, show_default=True, help="Top-level check seed.")
+@click.option(
+    "--parallel", default=4, type=int, show_default=True, help="Maximum concurrent trials.",
+)
+@click.option("--dry-run", is_flag=True, help="Print the plan without running any trials.")
+@click.option(
+    "--out", "out_path", default=None,
+    type=click.Path(path_type=Path), help="Write the verdict as JSON to this path.",
+)
+@click.option(
+    "--store", "store_path", default=None,
+    type=click.Path(path_type=Path),
+    help="SQLite store holding the baseline; this check's run is also recorded there.",
+)
+@click.pass_context
+def check(
+    ctx: click.Context,
+    baseline_name: str | None,
+    config_path: Path,
+    suite_path: Path | None,
+    margin_pp: float | None,
+    alpha: float | None,
+    seed: int,
+    parallel: int,
+    dry_run: bool,
+    out_path: Path | None,
+    store_path: Path | None,
+) -> None:
+    """CI wrapper: compare the working tree with a named baseline and set the exit code.
+
+    The candidate Arm is run fresh; the baseline side is read from a
+    previously saved `jerald baseline save` run, not re-run. --budget-usd
+    and --format from the spec's CLI reference are not implemented: no
+    cost tracking exists, and no report renderer beyond this plain-text
+    summary plus --out's JSON exists yet.
+    """
+    if baseline_name is None:
+        click.echo("Error: --baseline is required.", err=True)
+        ctx.exit(EXIT_USAGE_ERROR)
+
+    if suite_path is None:
+        click.echo("Error: --suite is required.", err=True)
+        ctx.exit(EXIT_USAGE_ERROR)
+
+    try:
+        project_config = load_config(config_path)
+    except ConfigLoadError as e:
+        click.echo(f"Error: {e}", err=True)
+        ctx.exit(EXIT_USAGE_ERROR)
+
+    try:
+        suite = load_suite(suite_path)
+    except SuiteLoadError as e:
+        click.echo(f"Error: {e}", err=True)
+        ctx.exit(EXIT_USAGE_ERROR)
+
+    resolved_margin_pp = margin_pp if margin_pp is not None else project_config.margin_pp
+    resolved_alpha = alpha if alpha is not None else project_config.alpha
+
+    if dry_run:
+        click.echo(f"baseline: {baseline_name}")
+        click.echo(f"suite: {suite.name} (v{suite.version})")
+        click.echo(f"tasks: {len(suite.tasks)}")
+        click.echo(f"trials per task: {suite.trials_per_task}")
+        click.echo(f"margin_pp: {resolved_margin_pp}, alpha: {resolved_alpha}")
+        click.echo(f"candidate overrides: {dict(project_config.candidate.overrides)}")
+        ctx.exit(EXIT_NO_REGRESSION)
+
+    if store_path is None:
+        click.echo("Error: --store is required.", err=True)
+        ctx.exit(EXIT_USAGE_ERROR)
+
+    store = Store(store_path)
+    baseline_run = store.get_baseline(baseline_name)
+    if baseline_run is None:
+        store.close()
+        click.echo(f"Error: no baseline named '{baseline_name}'.", err=True)
+        ctx.exit(EXIT_USAGE_ERROR)
+
+    orchestrator = Orchestrator(max_concurrency=parallel)
+    started_at = datetime.now(UTC)
+    try:
+        result = orchestrator.run_single(
+            suite.tasks, project_config.candidate,
+            trials_per_task=suite.trials_per_task, seed=seed,
+        )
+    except AdapterInfrastructureError as e:
+        store.close()
+        click.echo(f"Infrastructure failure: {e}", err=True)
+        ctx.exit(EXIT_INFRASTRUCTURE_FAILURE)
+    ended_at = datetime.now(UTC)
+
+    baseline_scores = _scores_by_task(baseline_run.trials)
+    candidate_scores = dict(result.scores)
+    if baseline_scores.keys() != candidate_scores.keys():
+        store.close()
+        missing = set(baseline_scores) - set(candidate_scores)
+        extra = set(candidate_scores) - set(baseline_scores)
+        click.echo(
+            "Error: the current suite's tasks don't match baseline "
+            f"'{baseline_name}''s tasks (missing: {sorted(missing)}, extra: {sorted(extra)}).",
+            err=True,
+        )
+        ctx.exit(EXIT_USAGE_ERROR)
+
+    verdict = run_compare(
+        baseline_scores=baseline_scores,
+        candidate_scores=candidate_scores,
+        margin_pp=resolved_margin_pp,
+        alpha=resolved_alpha,
+        seed=seed,
+    )
+    click.echo(
+        f"{verdict.label}: effect={verdict.effect_pp:+.2f}pp "
+        f"CI=[{verdict.ci_low_pp:+.2f}, {verdict.ci_high_pp:+.2f}]pp margin={verdict.margin_pp}pp"
+    )
+
+    if out_path is not None:
+        out_path.write_text(json.dumps({
+            "label": verdict.label,
+            "effect_pp": verdict.effect_pp,
+            "ci_low_pp": verdict.ci_low_pp,
+            "ci_high_pp": verdict.ci_high_pp,
+            "margin_pp": verdict.margin_pp,
+        }, indent=2))
+
+    run_id = store.save_run(
+        kind="check",
+        project=project_config.project,
+        suite_name=suite.name,
+        suite_version=suite.version,
+        seed=seed,
+        alpha=resolved_alpha,
+        started_at=started_at,
+        ended_at=ended_at,
+        trials=result.trials,
+        verdict=verdict,
+    )
+    store.close()
+    click.echo(f"run_id: {run_id}")
+
+    ctx.exit(_EXIT_CODE_BY_VERDICT_LABEL[verdict.label])
 
 
 if __name__ == "__main__":

@@ -407,3 +407,122 @@ def test_baseline_save_requires_store_flag(tmp_path: Path) -> None:
 
     assert result.exit_code == 3
     assert "--store" in result.output
+
+
+def _save_baseline(tmp_path: Path, config_path: Path, suite_path: Path, store_path: Path) -> None:
+    CliRunner().invoke(
+        main,
+        ["baseline", "save", "main", "--config", str(config_path), "--suite", str(suite_path),
+         "--store", str(store_path)],
+    )
+
+
+def test_check_reports_regression_against_a_saved_baseline(tmp_path: Path) -> None:
+    suite_path, config_path = _write_suite_and_config(tmp_path, candidate_model="candidate-model")
+    store_path = tmp_path / "jerald.db"
+    _save_baseline(tmp_path, config_path, suite_path, store_path)
+
+    result = CliRunner().invoke(
+        main,
+        ["check", "--baseline", "main", "--config", str(config_path), "--suite", str(suite_path),
+         "--store", str(store_path), "--seed", "0"],
+    )
+
+    assert result.exit_code == 1
+    assert "REGRESSION" in result.output
+
+
+def test_check_reports_no_regression_when_candidate_matches_baseline(tmp_path: Path) -> None:
+    suite_path, config_path = _write_suite_and_config(tmp_path, candidate_model="baseline-model")
+    store_path = tmp_path / "jerald.db"
+    _save_baseline(tmp_path, config_path, suite_path, store_path)
+
+    result = CliRunner().invoke(
+        main,
+        ["check", "--baseline", "main", "--config", str(config_path), "--suite", str(suite_path),
+         "--store", str(store_path), "--seed", "0"],
+    )
+
+    assert result.exit_code == 0
+    assert "NO_REGRESSION" in result.output
+
+
+def test_check_persists_a_run_with_kind_check(tmp_path: Path) -> None:
+    suite_path, config_path = _write_suite_and_config(tmp_path, candidate_model="candidate-model")
+    store_path = tmp_path / "jerald.db"
+    _save_baseline(tmp_path, config_path, suite_path, store_path)
+
+    CliRunner().invoke(
+        main,
+        ["check", "--baseline", "main", "--config", str(config_path), "--suite", str(suite_path),
+         "--store", str(store_path), "--seed", "0"],
+    )
+
+    store = Store(store_path)
+    check_runs = [r for r in store.list_runs() if r.kind == "check"]
+    assert len(check_runs) == 1
+    assert check_runs[0].verdict_label == "REGRESSION"
+    store.close()
+
+
+def test_check_requires_baseline_flag(tmp_path: Path) -> None:
+    suite_path, config_path = _write_suite_and_config(tmp_path, candidate_model="candidate-model")
+
+    result = CliRunner().invoke(
+        main, ["check", "--config", str(config_path), "--suite", str(suite_path)]
+    )
+
+    assert result.exit_code == 3
+    assert "--baseline" in result.output
+
+
+def test_check_requires_suite_flag(tmp_path: Path) -> None:
+    _, config_path = _write_suite_and_config(tmp_path, candidate_model="candidate-model")
+
+    result = CliRunner().invoke(
+        main, ["check", "--baseline", "main", "--config", str(config_path)]
+    )
+
+    assert result.exit_code == 3
+    assert "--suite" in result.output
+
+
+def test_check_requires_store_flag(tmp_path: Path) -> None:
+    suite_path, config_path = _write_suite_and_config(tmp_path, candidate_model="candidate-model")
+
+    result = CliRunner().invoke(
+        main,
+        ["check", "--baseline", "main", "--config", str(config_path), "--suite", str(suite_path)],
+    )
+
+    assert result.exit_code == 3
+    assert "--store" in result.output
+
+
+def test_check_exits_3_when_baseline_name_unknown(tmp_path: Path) -> None:
+    suite_path, config_path = _write_suite_and_config(tmp_path, candidate_model="candidate-model")
+    store_path = tmp_path / "jerald.db"
+    Store(store_path).close()
+
+    result = CliRunner().invoke(
+        main,
+        ["check", "--baseline", "missing", "--config", str(config_path), "--suite", str(suite_path),
+         "--store", str(store_path)],
+    )
+
+    assert result.exit_code == 3
+    assert "missing" in result.output
+
+
+def test_check_dry_run_prints_plan_without_requiring_store(tmp_path: Path) -> None:
+    suite_path, config_path = _write_suite_and_config(tmp_path, candidate_model="candidate-model")
+
+    result = CliRunner().invoke(
+        main,
+        ["check", "--baseline", "main", "--config", str(config_path), "--suite", str(suite_path),
+         "--dry-run"],
+    )
+
+    assert result.exit_code == 0
+    assert "baseline: main" in result.output
+    assert "REGRESSION" not in result.output
