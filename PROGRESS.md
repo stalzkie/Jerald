@@ -1,6 +1,6 @@
 # Jerald — progress log
 
-Status snapshot for picking this back up. Last updated 2026-10-06, after 11 commits on `main`
+Status snapshot for picking this back up. Last updated 2026-10-06, after 12 commits on `main`
 (pushed to [github.com/stalzkie/Jerald](https://github.com/stalzkie/Jerald), CI green on
 Python 3.11/3.12/3.13 throughout).
 
@@ -53,7 +53,10 @@ confirmed or overridden.
 
 | Orchestrator | `src/jerald/orchestrator/core.py` | 6 | Wires `Adapter.run_trial` → `Scorer.score` → `compare()` for the fixed-n, two-arm slice (design doc: `docs/design/orchestrator.md`). New `Task` (TaskSpec + its Scorers) and `Arm` (name + Adapter + overrides) types live here, not on the Adapter port, since the Adapter is deliberately Scorer-blind. Pairs baseline/candidate with the *same* env seed per `(task, trial_index)` — required for `compare()`'s paired bootstrap to mean anything — then shuffles submission order for interleaving. Runs jobs on a `ThreadPoolExecutor` (one global `max_concurrency`, not yet per-provider — no suite config to drive that split exists yet). Retry loop is the Adapter contract's documented usage example verbatim: retryable infra errors retry up to `max_retries` with an injectable `backoff`; agent-side failures (a `TrialResult`, not an exception) are never retried. `FakeAdapter.call_count` was made public (was `_call_count`) so these tests can assert exact retry counts. |
 
-**46 tests total (1 skipped on win32), all passing.** `ruff check .` clean.
+| Outcome Scorers (`required`) | `src/jerald/scorers/outcome.py` | +3 | Small extension needed by the suite loader: `exact`/`regex`/`json_schema` now take `required: bool = True` and carry it through to `ScoreResult.required`, which the field's own docstring already said was "carried through for the gate" but nothing threaded it until now. |
+| Suite loader | `src/jerald/suite/loader.py` | 8 | Parses a suite YAML file (`docs/design/suite-loading.md`) into `Suite(name, version, tasks, trials_per_task)`, where `tasks` is ready to hand straight to `Orchestrator.run_comparison`. Only parses what's already built: `exact`/`regex`/`json_schema` scorers (any other `type:` — `trajectory`, `efficiency`, `state`, `python`, `shell`, judge — raises `SuiteLoadError` naming it as not implemented yet, rather than silently skipping); per-task `timeout_s`/`max_steps` override the suite's `defaults`. A scorer-less task is rejected at load time (it would vacuously pass every Trial). Deliberately *not* parsed, since nothing consumes them: `tags` (no gate/`critical_slices` logic exists), `input.env.seed`/`fixtures` (the Orchestrator already derives its own per-trial seed; fixtures need the sandbox layer, which doesn't exist). Added `pyyaml` as a dependency. |
+
+**57 tests total (1 skipped on win32), all passing.** `ruff check .` clean.
 
 ## Open decisions (never formally confirmed — currently running on my recommendations)
 
@@ -75,23 +78,29 @@ release, a README, a announcement) happens.
 
 In rough dependency order:
 
-1. **CLI commands** — `jerald run`, `jerald compare` wired to the Orchestrator (currently only
-   `--version`/`--help` exist). `jerald init`, `doctor`, `baseline`, `calibrate`, `plan`,
-   `check`, `attribute`, `bisect`, `canary`, `stress`, `report`, `capture`, `replay`, `purge`
-   are all unbuilt — intentionally deferred past the narrow MVP slice.
-2. **Suite/config loading** — nothing parses `suites/*.yaml` or `jerald.yaml` yet; `TaskSpec`
-   and the Orchestrator's `Task`/`Arm` are currently always hand-constructed in tests. This is
-   the real blocker on wiring up `jerald compare` for real: the CLI needs something to build
-   `Task`/`Arm` lists from before it can call `Orchestrator.run_comparison`.
+1. **`jerald.yaml` (configuration file) loading** — the suite loader handles `suites/*.yaml`
+   (the Task/Scorer side); still nothing parses `jerald.yaml` (the Arm side: `adapter.type`
+   + `url`/command, `configs.baseline`/`configs.candidate` overrides, `policy.margin_pp`/
+   `alpha`/`min_trials`/`max_trials`/`budget_usd`). This is the remaining blocker on wiring up
+   `jerald compare` for real: the CLI needs this to build `Arm` instances (which adapter type,
+   which overrides) to pair with the suite loader's `Task` list.
+2. **CLI commands** — `jerald run`, `jerald compare` wired to the Orchestrator using both
+   loaders above (currently only `--version`/`--help` exist). `jerald init`, `doctor`,
+   `baseline`, `calibrate`, `plan`, `check`, `attribute`, `bisect`, `canary`, `stress`,
+   `report`, `capture`, `replay`, `purge` are all unbuilt — intentionally deferred past the
+   narrow MVP slice.
 3. **SQLite store** — `src/jerald/store/` is an empty package; nothing is persisted yet.
    `ComparisonResult` carries what a store would need (the verdict plus both score matrices).
 4. **Per-provider concurrency caps** — the Orchestrator currently takes one global
-   `max_concurrency`; splitting it per-provider needs the suite config (item 2) to know which
-   provider each Arm's Adapter talks to.
+   `max_concurrency`; splitting it per-provider needs `jerald.yaml` loading (item 1) to know
+   which provider each Arm's Adapter talks to.
 5. **`McpAdapter`** — the fourth production adapter named in the spec and in
    `docs/design/adapter-contract.md`'s registry note; not started, no design work done on it
    yet (what MCP client library, what transport, how `JERALD_TOOL_BASE_URL` fault injection
    applies to MCP tool calls specifically).
+6. **Trajectory/efficiency/state/judge Scorer families** — the suite loader already raises a
+   clear "not implemented yet" error for these `type:` values, so adding one is additive: a new
+   entry in the loader's scorer factory registry plus the Scorer implementation itself.
 
 Not started at all: trajectory/efficiency/judge Scorer families, the sequential
 rounds/alpha-spending engine, fault injection, canaries, attribution, bisect, the sandbox/proxy
@@ -102,7 +111,7 @@ layer, reporting formats.
 - Spec: `Jerald Agent Degradation Harness – Spec.md` (corrected once, see commit `1d77342`)
 - Domain glossary: `CONTEXT.md`
 - Design docs: `docs/design/adapter-contract.md`, `docs/design/scorer-and-statistics.md`,
-  `docs/design/orchestrator.md`
+  `docs/design/orchestrator.md`, `docs/design/suite-loading.md`
 - Decision record: `docs/adr/0001-no-fault-injection-or-cancellation-in-adapter.md`
 - Fact-check notes: `research/spec-claims-verification.md`
 - This file: update it at the end of each work session, don't let it drift

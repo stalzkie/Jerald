@@ -4,7 +4,7 @@ from jerald.adapters.base import TrialResult
 from jerald.scorers.base import ScoreResult
 
 
-def exact(expected: str):
+def exact(expected: str, *, required: bool = True):
     class _Exact:
         def score(self, trial: TrialResult) -> ScoreResult:
             passed = trial.final_message == expected
@@ -13,12 +13,13 @@ def exact(expected: str):
                 passed=passed,
                 value=1.0 if passed else 0.0,
                 evidence=f"final_message={trial.final_message!r}",
+                required=required,
             )
 
     return _Exact()
 
 
-def regex(pattern: str):
+def regex(pattern: str, *, required: bool = True):
     import re as _re
 
     compiled = _re.compile(pattern)
@@ -32,12 +33,13 @@ def regex(pattern: str):
                 passed=match is not None,
                 value=1.0 if match else 0.0,
                 evidence=f"final_message={text!r}",
+                required=required,
             )
 
     return _Regex()
 
 
-def json_schema(schema: dict):
+def json_schema(schema: dict, *, required: bool = True):
     import json as _json
 
     import jsonschema as _jsonschema
@@ -55,6 +57,7 @@ def json_schema(schema: dict):
                     passed=False,
                     value=0.0,
                     evidence=f"final_message is not valid JSON: {exc}",
+                    required=required,
                 )
 
             errors = list(validator.iter_errors(instance))
@@ -65,6 +68,7 @@ def json_schema(schema: dict):
                 passed=passed,
                 value=1.0 if passed else 0.0,
                 evidence=evidence,
+                required=required,
             )
 
     return _JsonSchema()

@@ -90,3 +90,25 @@ def test_json_schema_fails_without_raising_when_final_message_is_not_json() -> N
     result = scorer.score(_trial("not json at all"))
     assert result.passed is False
     assert result.value == 0.0
+
+
+def test_exact_carries_through_a_non_default_required_flag() -> None:
+    scorer = exact("ok", required=False)
+    result = scorer.score(_trial("not ok"))
+    assert result.required is False
+
+
+def test_regex_carries_through_a_non_default_required_flag() -> None:
+    from jerald.scorers.outcome import regex
+
+    scorer = regex(r"ok", required=False)
+    result = scorer.score(_trial("nope"))
+    assert result.required is False
+
+
+def test_json_schema_carries_through_a_non_default_required_flag() -> None:
+    from jerald.scorers.outcome import json_schema
+
+    scorer = json_schema({"type": "object"}, required=False)
+    result = scorer.score(_trial("not json"))
+    assert result.required is False
