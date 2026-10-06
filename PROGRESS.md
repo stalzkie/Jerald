@@ -1,6 +1,6 @@
 # Jerald — progress log
 
-Status snapshot for picking this back up. Last updated 2026-10-06, after 14 commits on `main`
+Status snapshot for picking this back up. Last updated 2026-10-06, after 16 commits on `main`
 (pushed to [github.com/stalzkie/Jerald](https://github.com/stalzkie/Jerald), CI green on
 Python 3.11/3.12/3.13 throughout).
 
@@ -60,7 +60,10 @@ confirmed or overridden.
 
 | `jerald compare` | `src/jerald/cli.py` | 8 | The first real, end-to-end CLI command: loads both YAML files, builds the Orchestrator, prints the `Verdict`, and maps its label to the spec's CLI reference exit codes (0 no-regression/improvement, 1 regression, 2 inconclusive). `--suite` is required but deliberately *not* `required=True` at the Click level — Click's own missing-option exit code is 2, which collides with the spec's domain meaning for 2 ("Inconclusive"); it's checked manually so a usage error reliably exits 3. `ConfigLoadError`/`SuiteLoadError` → exit 3; `AdapterInfrastructureError` → exit 4. `--dry-run` prints the resolved plan (suite, task count, trials, margin/alpha, both arms' overrides) without running anything. `--out` writes the verdict as JSON. **Not implemented**, named explicitly in the docstring rather than silently absent: `--max-trials`/`--fixed-n` (no sequential engine exists to need an escape hatch from), `--budget-usd` (no cost tracking). `jerald run` is still unbuilt — its whole point is storing trials, and the SQLite store doesn't exist yet, so building it now would be half-finished. Also fixed both loaders to wrap a missing file in `SuiteLoadError`/`ConfigLoadError` instead of letting `FileNotFoundError` escape as a raw traceback. |
 
-**74 tests total (1 skipped on win32), all passing.** `ruff check .` clean.
+| `ComparisonResult.trials` | `src/jerald/orchestrator/core.py` | +1 | Small widening needed by the store: added `TrialRecord` (task_id, arm_name, trial_index, seed, the full `TrialResult`, every `ScoreResult`, `passed`) and a sorted `ComparisonResult.trials: Sequence[TrialRecord]`. `baseline_scores`/`candidate_scores` stay as the lossy bool-only projection `compare()` needs; `trials` is the full record a store needs. Sorted by `(task_id, arm_name, trial_index)` so the result is deterministic regardless of thread completion order. |
+| SQLite store | `src/jerald/store/store.py` | 5 | Persists exactly what `ComparisonResult` produces (design in `docs/design/store.md`) — deliberately 2 tables, not the spec's 5 (`runs`/`trials`/`steps`/`scores`/`verdicts`): `runs` (one row per `run_comparison` call, the `Verdict`'s fields flattened in) and `trials` (one row per `TrialRecord`, with `trajectory_json`/`scores_json` JSON columns standing in for the spec's separate `steps`/`scores` tables — normalizing those only pays off once something queries across trials by step/scorer, which nothing does yet). `suites`/`tasks`/`configs`/`noise_profiles`/`canary_points` are out of scope entirely — no content-hashing, `calibrate`, or `canary` exists to need them. `PRAGMA journal_mode=WAL` per the spec's storage line, verified via a `journal_mode()` method rather than poking `_connection` from a test. `save_run(result=...)` takes the Orchestrator's `ComparisonResult` directly — the caller's job is "run it, then save it," not "run it, reshape it, then save it." |
+
+**80 tests total (1 skipped on win32), all passing.** `ruff check .` clean.
 
 ## Open decisions (never formally confirmed — currently running on my recommendations)
 
@@ -82,12 +85,16 @@ release, a README, a announcement) happens.
 
 In rough dependency order:
 
-1. **SQLite store** — `src/jerald/store/` is an empty package; nothing is persisted yet.
-   `ComparisonResult` carries what a store would need (the verdict plus both score matrices).
-   This unblocks `jerald run` (its whole point is storing trials) and `jerald baseline`/
-   `check`/`report`/`replay`/`purge`, all of which need a stored Run to act on.
-2. **`jerald run`** — needs the store (item 1). Until then `jerald compare` is the only
-   working command.
+1. **`jerald run`** — now unblocked: `Store.save_run(result=...)` exists and takes a
+   `ComparisonResult` directly. `run` needs its own single-arm path though — it runs *one*
+   configuration, not a baseline/candidate pair, which `Orchestrator.run_comparison` doesn't
+   support (it's hard-coded to exactly two arms per the fixed-n MVP scope). Either add a
+   single-arm method to the Orchestrator or have `run` call `run_comparison` with the same Arm
+   as both baseline and candidate and only store one side — the latter is a hack, so this
+   probably wants a few minutes of real design, not just wiring.
+2. **Wire `jerald compare` to the store** — right now `compare`'s `ComparisonResult` is printed
+   and discarded. Saving it (behind a flag, or always, per spec's "every verdict can be traced
+   to its trials") is what makes `jerald baseline`/`report`/`replay` possible later.
 3. **Per-provider concurrency caps** — the Orchestrator currently takes one global
    `max_concurrency`; splitting it per-provider needs the config loader to carry which
    provider each Arm's Adapter talks to, which it doesn't today (one Adapter, shared by both
@@ -115,7 +122,8 @@ layer, reporting formats.
 - Spec: `Jerald Agent Degradation Harness – Spec.md` (corrected once, see commit `1d77342`)
 - Domain glossary: `CONTEXT.md`
 - Design docs: `docs/design/adapter-contract.md`, `docs/design/scorer-and-statistics.md`,
-  `docs/design/orchestrator.md`, `docs/design/suite-loading.md`, `docs/design/config-loading.md`
+  `docs/design/orchestrator.md`, `docs/design/suite-loading.md`, `docs/design/config-loading.md`,
+  `docs/design/store.md`
 - Decision record: `docs/adr/0001-no-fault-injection-or-cancellation-in-adapter.md`
 - Fact-check notes: `research/spec-claims-verification.md`
 - This file: update it at the end of each work session, don't let it drift
