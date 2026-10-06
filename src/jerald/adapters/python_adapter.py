@@ -22,7 +22,7 @@ def _empty_result(trial_id: str, task_id: str, outcome: str) -> TrialResult:
 
 class PythonAdapter:
     def __init__(self, aut: Any) -> None:
-        self._aut = aut
+        self.aut = aut
 
     def run_trial(
         self,
@@ -35,7 +35,7 @@ class PythonAdapter:
         # thread running (Python cannot kill a thread), but that must never block
         # later calls on this same adapter, so each call gets its own worker.
         executor = ThreadPoolExecutor(max_workers=1)
-        future = executor.submit(self._aut.run, task, overrides, seed)
+        future = executor.submit(self.aut.run, task, overrides, seed)
         try:
             response = future.result(timeout=task.timeout_s)
         except FutureTimeoutError:

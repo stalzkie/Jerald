@@ -23,7 +23,7 @@ def _empty_result(trial_id: str, task_id: str, outcome: str) -> TrialResult:
 
 class HttpAdapter:
     def __init__(self, url: str, *, client: httpx.Client | None = None) -> None:
-        self._url = url
+        self.url = url
         self._client = client if client is not None else httpx.Client()
         self._owns_client = client is None
 
@@ -42,7 +42,7 @@ class HttpAdapter:
             "overrides": dict(overrides),
         }
         try:
-            response = self._client.post(self._url, json=request, timeout=task.timeout_s)
+            response = self._client.post(self.url, json=request, timeout=task.timeout_s)
         except httpx.TimeoutException:
             return _empty_result(trial_id, task.task_id, "timeout")
         except httpx.HTTPError as e:

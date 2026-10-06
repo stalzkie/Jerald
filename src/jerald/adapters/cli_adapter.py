@@ -22,7 +22,7 @@ def _empty_result(trial_id: str, task_id: str, outcome: str) -> TrialResult:
 
 class CliAdapter:
     def __init__(self, command: Sequence[str], *, kill_grace_s: float = 5.0) -> None:
-        self._command = list(command)
+        self.command = list(command)
         self._kill_grace_s = kill_grace_s
 
     def run_trial(
@@ -39,7 +39,7 @@ class CliAdapter:
             "overrides": dict(overrides),
         })
         proc = subprocess.Popen(
-            self._command,
+            self.command,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
