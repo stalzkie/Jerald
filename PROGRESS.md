@@ -1,6 +1,6 @@
 # Jerald — progress log
 
-Status snapshot for picking this back up. Last updated 2026-10-06, after 7 commits on `main`
+Status snapshot for picking this back up. Last updated 2026-10-06, after 8 commits on `main`
 (pushed to [github.com/stalzkie/Jerald](https://github.com/stalzkie/Jerald), CI green on
 Python 3.11/3.12/3.13 throughout).
 
@@ -46,8 +46,9 @@ confirmed or overridden.
 | Outcome Scorers | `src/jerald/scorers/outcome.py` | 9 | `exact`, `regex`, `json_schema`; covers pass/fail + the no-raise-on-malformed-input invariant |
 | Statistics engine | `src/jerald/analysis/compare.py` | 5 | Fixed-n two-level paired bootstrap; task-set invariant, all three verdict outcomes, seed-determinism |
 | PythonAdapter | `src/jerald/adapters/python_adapter.py` | 5 | Wraps a plain `run(task, config, seed)` call: success, AUT exceptions → `agent_error` (never propagated), `timeout_s` enforcement, `max_steps_exceeded` detection. **Found and fixed a real bug**: a shared single-worker thread pool let a timed-out call's lingering thread block every later call on the same adapter instance — pinned with a timing assertion, fixed by giving each call its own disposable worker. |
+| CliAdapter | `src/jerald/adapters/cli_adapter.py` | 6 (+1 skipped on Windows) | JSON on stdin/stdout of a subprocess, per `docs/design/adapter-contract.md`. Non-zero exit → `AdapterInfrastructureError(retryable=True)` (process crash, might be transient); malformed JSON on stdout with exit 0 → `AdapterInfrastructureError(retryable=False)` (wire-schema bug, retrying won't help); exit 0 with an in-band `"error"` field → `agent_error` outcome, never an exception. Timeout escalates `terminate()` (SIGTERM on POSIX) → wait `kill_grace_s` → `kill()` (SIGKILL) if still alive. The SIGTERM-ignored escalation test is `skipif(win32)`: Windows has no catchable SIGTERM — `Popen.terminate()` is an unconditional `TerminateProcess` there, so the escalation path can only be observed on the Linux CI matrix, not on a Windows dev machine. |
 
-**19 tests total, all passing.** `ruff check .` clean.
+**25 tests total (1 skipped on win32), all passing.** `ruff check .` clean.
 
 ## Open decisions (never formally confirmed — currently running on my recommendations)
 
@@ -56,7 +57,7 @@ From the grilling round, still awaiting your answer or override:
 - **Q1 License**: Apache-2.0 (in LICENSE/pyproject.toml already)
 - **Q2 Default margin**: 3pp fixed default (implemented as `compare()`'s default)
 - **Q3 Judge scorers on the gate**: kept the spec's conditional rule (calibrated + ≥0.9 agreement) — not yet implemented, just not contradicted
-- **Q4 First adapter**: Python adapter built first ✅ — CLI/HTTP next, per this recommendation
+- **Q4 First adapter**: Python adapter built first ✅, CliAdapter second ✅ — HTTP next, per this recommendation
 - **Q5 MVP starting point**: narrow slice (fixed-n compare, outcome scorers, python adapter) before the sequential engine — this is the plan everything below assumes
 - **Q6 Validation rigor**: not yet relevant — no public claims have been made
 - **Q7 Pace/resourcing**: assumed solo + illustrative timeline — unconfirmed
@@ -69,26 +70,22 @@ release, a README, a announcement) happens.
 
 In rough dependency order:
 
-1. **`CliAdapter`** — JSON on stdin/stdout of a subprocess. Needs: subprocess spawn/teardown,
-   SIGTERM→SIGKILL escalation on timeout (mirrors the per-call-thread fix just made for
-   Python), exit-code-vs-in-band-error-field disambiguation (non-zero exit = infra failure;
-   zero exit with an `error` field in the JSON = agent failure).
-2. **`HttpAdapter`** — needs an HTTP client dependency decision first (`httpx` vs `requests`;
+1. **`HttpAdapter`** — needs an HTTP client dependency decision first (`httpx` vs `requests`;
    `httpx` has native timeout and async-readiness going for it). Needs a mock transport for
    tests (`httpx`'s `MockTransport` or `responses`) rather than a real server.
-3. **`FakeAdapter`** — the test double named in `docs/design/adapter-contract.md`, needed once
+2. **`FakeAdapter`** — the test double named in `docs/design/adapter-contract.md`, needed once
    the Orchestrator (next item) has tests of its own.
-4. **Orchestrator** — wires `Adapter.run_trial` → `Scorer.score` → `compare()` into the actual
+3. **Orchestrator** — wires `Adapter.run_trial` → `Scorer.score` → `compare()` into the actual
    `jerald run` / `jerald compare` command loop. This is where retry-on-infra-error,
    interleaving, and per-provider concurrency caps (all named in the spec's Execution model)
    get built — none of that exists yet.
-5. **CLI commands** — `jerald run`, `jerald compare` wired to real logic (currently only
+4. **CLI commands** — `jerald run`, `jerald compare` wired to real logic (currently only
    `--version`/`--help` exist). `jerald init`, `doctor`, `baseline`, `calibrate`, `plan`,
    `check`, `attribute`, `bisect`, `canary`, `stress`, `report`, `capture`, `replay`, `purge`
    are all unbuilt — intentionally deferred past the narrow MVP slice.
-6. **Suite/config loading** — nothing parses `suites/*.yaml` or `jerald.yaml` yet; `TaskSpec`
+5. **Suite/config loading** — nothing parses `suites/*.yaml` or `jerald.yaml` yet; `TaskSpec`
    is currently always hand-constructed in tests.
-7. **SQLite store** — `src/jerald/store/` is an empty package; nothing is persisted yet.
+6. **SQLite store** — `src/jerald/store/` is an empty package; nothing is persisted yet.
 
 Not started at all: trajectory/efficiency/judge Scorer families, the sequential
 rounds/alpha-spending engine, fault injection, canaries, attribution, bisect, the sandbox/proxy
