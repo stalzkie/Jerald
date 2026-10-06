@@ -71,7 +71,24 @@ class Orchestrator:
         margin_pp: float = 3.0,
         alpha: float = 0.05,
     ) -> ComparisonResult: ...
+
+    def run_single(
+        self,
+        tasks: Sequence[Task],
+        arm: Arm,
+        trials_per_task: int,
+        seed: int = 0,
+    ) -> SingleRunResult: ...
 ```
+
+`run_single` is `jerald run`'s method: one Configuration, no comparison, so no `Verdict` and no
+seed-pairing (pairing only means something when there's a second arm to pair against). It shares
+everything else with `run_comparison` — retry, concurrency, scoring, interleaving within the one
+arm's own trials — via a private `_run_jobs(jobs)` both methods call, so the two public methods
+are each just "build this arm's job list the way it needs, hand it to `_run_jobs`, shape the
+result." `SingleRunResult` is `ComparisonResult`'s single-arm counterpart: `scores` (the
+`compare()`-shaped projection, kept even though nothing calls `compare()` here, since it's the
+natural "did this pass" view) plus the same sorted `trials: Sequence[TrialRecord]`.
 
 ## Behaviour
 

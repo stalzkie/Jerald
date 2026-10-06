@@ -49,6 +49,15 @@ class ComparisonResult:
     trials: Sequence[TrialRecord]
 
 
+@dataclass(frozen=True)
+class SingleRunResult:
+    """The run_single counterpart of ComparisonResult: one arm, no pairing,
+    no Verdict -- there's nothing to compare a single Configuration against."""
+
+    scores: Mapping[str, Sequence[bool]]
+    trials: Sequence[TrialRecord]
+
+
 def _default_backoff(attempt: int) -> None:
     time.sleep(min(2**attempt * 0.1, 2.0))
 
@@ -92,42 +101,21 @@ class Orchestrator:
         # Shared env seeds above pair baseline/candidate at the same (task, trial
         # index); the shuffle below only changes submission order, not seeds, so
         # it interleaves arms/tasks without disturbing the pairing.
-        jobs: list[tuple[Task, Arm, int]] = [
-            (task, arm, i)
+        jobs: list[tuple[Task, Arm, int, int]] = [
+            (task, arm, i, env_seeds[(task.spec.task_id, i)])
             for task in tasks
             for i in range(trials_per_task)
             for arm in (baseline, candidate)
         ]
         rng.shuffle(jobs)
 
+        trial_records = self._run_jobs(jobs)
+
         baseline_scores: dict[str, list[bool]] = {task.spec.task_id: [] for task in tasks}
         candidate_scores: dict[str, list[bool]] = {task.spec.task_id: [] for task in tasks}
-        trial_records: list[TrialRecord] = []
-        lock = threading.Lock()
-
-        def run_job(task: Task, arm: Arm, trial_index: int) -> None:
-            trial_id = f"{task.spec.task_id}:{arm.name}:{trial_index}"
-            env_seed = env_seeds[(task.spec.task_id, trial_index)]
-            trial = self._execute_with_retry(arm.adapter, task.spec, trial_id, env_seed, arm.overrides)
-            scores, passed = _score_trial(task.scorers, trial)
-            target = baseline_scores if arm is baseline else candidate_scores
-            with lock:
-                target[task.spec.task_id].append(passed)
-                trial_records.append(TrialRecord(
-                    task_id=task.spec.task_id, arm_name=arm.name, trial_index=trial_index,
-                    seed=env_seed, trial=trial, scores=scores, passed=passed,
-                ))
-
-        # A raised AdapterInfrastructureError propagates as soon as any job's
-        # future completes with it; threads already running cannot be killed
-        # (mirrors the lesson in PythonAdapter), so the `with` block still waits
-        # for every submitted job to finish before returning control.
-        with ThreadPoolExecutor(max_workers=self._max_concurrency) as pool:
-            futures = [pool.submit(run_job, *job) for job in jobs]
-            for future in as_completed(futures):
-                future.result()
-
-        trial_records.sort(key=lambda r: (r.task_id, r.arm_name, r.trial_index))
+        for r in trial_records:
+            target = baseline_scores if r.arm_name == baseline.name else candidate_scores
+            target[r.task_id].append(r.passed)
 
         verdict = compare(
             baseline_scores=baseline_scores,
@@ -143,6 +131,63 @@ class Orchestrator:
             candidate_scores=candidate_scores,
             trials=trial_records,
         )
+
+    def run_single(
+        self,
+        tasks: Sequence[Task],
+        arm: Arm,
+        trials_per_task: int,
+        seed: int = 0,
+    ) -> SingleRunResult:
+        """Run one Configuration and record its trials -- no Verdict, since
+        there's nothing to compare it against (jerald run's job, as opposed
+        to jerald compare's)."""
+        rng = random.Random(seed)
+        env_seeds: dict[tuple[str, int], int] = {
+            (task.spec.task_id, i): rng.randrange(2**32)
+            for task in tasks
+            for i in range(trials_per_task)
+        }
+        jobs: list[tuple[Task, Arm, int, int]] = [
+            (task, arm, i, env_seeds[(task.spec.task_id, i)])
+            for task in tasks
+            for i in range(trials_per_task)
+        ]
+        rng.shuffle(jobs)
+
+        trial_records = self._run_jobs(jobs)
+
+        scores: dict[str, list[bool]] = {task.spec.task_id: [] for task in tasks}
+        for r in trial_records:
+            scores[r.task_id].append(r.passed)
+
+        return SingleRunResult(scores=scores, trials=trial_records)
+
+    def _run_jobs(self, jobs: Sequence[tuple[Task, Arm, int, int]]) -> list[TrialRecord]:
+        trial_records: list[TrialRecord] = []
+        lock = threading.Lock()
+
+        def run_job(task: Task, arm: Arm, trial_index: int, env_seed: int) -> None:
+            trial_id = f"{task.spec.task_id}:{arm.name}:{trial_index}"
+            trial = self._execute_with_retry(arm.adapter, task.spec, trial_id, env_seed, arm.overrides)
+            scores, passed = _score_trial(task.scorers, trial)
+            with lock:
+                trial_records.append(TrialRecord(
+                    task_id=task.spec.task_id, arm_name=arm.name, trial_index=trial_index,
+                    seed=env_seed, trial=trial, scores=scores, passed=passed,
+                ))
+
+        # A raised AdapterInfrastructureError propagates as soon as any job's
+        # future completes with it; threads already running cannot be killed
+        # (mirrors the lesson in PythonAdapter), so the `with` block still waits
+        # for every submitted job to finish before returning control.
+        with ThreadPoolExecutor(max_workers=self._max_concurrency) as pool:
+            futures = [pool.submit(run_job, *job) for job in jobs]
+            for future in as_completed(futures):
+                future.result()
+
+        trial_records.sort(key=lambda r: (r.task_id, r.arm_name, r.trial_index))
+        return trial_records
 
     def _execute_with_retry(
         self,

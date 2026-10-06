@@ -147,6 +147,56 @@ def test_orchestrator_raises_when_a_non_retryable_infrastructure_error_occurs() 
     assert broken.call_count == 1
 
 
+def test_orchestrator_run_single_executes_each_task_the_requested_number_of_times() -> None:
+    orchestrator = Orchestrator(max_concurrency=2, backoff=lambda attempt: None)
+    tasks = [_task(f"task_{i}") for i in range(2)]
+    arm = Arm(name="solo", adapter=FakeAdapter(_responder("ok")), overrides={})
+
+    result = orchestrator.run_single(tasks, arm, trials_per_task=3, seed=0)
+
+    assert result.scores["task_0"] == [True, True, True]
+    assert result.scores["task_1"] == [True, True, True]
+    assert len(result.trials) == 6
+    assert all(r.arm_name == "solo" for r in result.trials)
+
+
+def test_orchestrator_run_single_records_sorted_per_trial_detail() -> None:
+    orchestrator = Orchestrator(max_concurrency=2, backoff=lambda attempt: None)
+    arm = Arm(name="solo", adapter=FakeAdapter(_responder("bad")), overrides={})
+
+    result = orchestrator.run_single([_task("task_0")], arm, trials_per_task=2, seed=0)
+
+    assert [r.trial_index for r in result.trials] == [0, 1]
+    assert all(r.task_id == "task_0" and not r.passed for r in result.trials)
+    assert all(r.trial.final_message == "bad" for r in result.trials)
+    assert all(len(r.scores) == 1 for r in result.trials)
+
+
+def test_orchestrator_run_single_retries_a_retryable_infrastructure_error() -> None:
+    orchestrator = Orchestrator(max_concurrency=1, max_retries=3, backoff=lambda attempt: None)
+    flaky = FakeAdapter(_responder("ok"), fail_calls=[0],
+                         error=AdapterInfrastructureError("transient", retryable=True))
+    arm = Arm(name="solo", adapter=flaky, overrides={})
+
+    result = orchestrator.run_single([_task("task_0")], arm, trials_per_task=3, seed=0)
+
+    assert result.scores["task_0"] == [True, True, True]
+    assert flaky.call_count == 4  # 3 trials + 1 retried failure
+
+
+def test_orchestrator_run_single_raises_when_a_non_retryable_infrastructure_error_occurs() -> None:
+    import pytest
+
+    orchestrator = Orchestrator(max_concurrency=1, backoff=lambda attempt: None)
+    broken = FakeAdapter(_responder("ok"), fail_calls=[0],
+                          error=AdapterInfrastructureError("bad request", retryable=False))
+    arm = Arm(name="solo", adapter=broken, overrides={})
+
+    with pytest.raises(AdapterInfrastructureError) as excinfo:
+        orchestrator.run_single([_task("task_0")], arm, trials_per_task=1, seed=0)
+    assert excinfo.value.retryable is False
+
+
 def test_orchestrator_raises_after_exhausting_retries() -> None:
     import pytest
 
