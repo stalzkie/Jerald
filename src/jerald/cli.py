@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import click
@@ -9,6 +10,7 @@ from jerald import __version__
 from jerald.adapters.base import AdapterInfrastructureError
 from jerald.config.loader import ConfigLoadError, load_config
 from jerald.orchestrator.core import Orchestrator
+from jerald.store.store import Store
 from jerald.suite.loader import SuiteLoadError, load_suite
 
 EXIT_NO_REGRESSION = 0
@@ -51,6 +53,10 @@ def main() -> None:
     "--out", "out_path", default=None,
     type=click.Path(path_type=Path), help="Write the verdict as JSON to this path.",
 )
+@click.option(
+    "--store", "store_path", default=None,
+    type=click.Path(path_type=Path), help="Persist the run to this SQLite store.",
+)
 @click.pass_context
 def compare(
     ctx: click.Context,
@@ -62,6 +68,7 @@ def compare(
     parallel: int,
     dry_run: bool,
     out_path: Path | None,
+    store_path: Path | None,
 ) -> None:
     """Compare two arms using the fixed-n statistics engine.
 
@@ -71,6 +78,10 @@ def compare(
     --budget-usd, and --fixed-n from the spec's CLI reference are not
     implemented: there is no sequential engine to opt out of yet, and no
     cost tracking to cap.
+
+    --store is opt-in (no default path): pass it to persist the run and its
+    trials to a SQLite store and print the run_id; omit it to only print the
+    verdict, as before.
     """
     if suite_path is None:
         click.echo("Error: --suite is required.", err=True)
@@ -102,6 +113,7 @@ def compare(
         ctx.exit(EXIT_NO_REGRESSION)
 
     orchestrator = Orchestrator(max_concurrency=parallel)
+    started_at = datetime.now(UTC)
     try:
         result = orchestrator.run_comparison(
             suite.tasks,
@@ -115,6 +127,7 @@ def compare(
     except AdapterInfrastructureError as e:
         click.echo(f"Infrastructure failure: {e}", err=True)
         ctx.exit(EXIT_INFRASTRUCTURE_FAILURE)
+    ended_at = datetime.now(UTC)
 
     verdict = result.verdict
     click.echo(
@@ -130,6 +143,22 @@ def compare(
             "ci_high_pp": verdict.ci_high_pp,
             "margin_pp": verdict.margin_pp,
         }, indent=2))
+
+    if store_path is not None:
+        store = Store(store_path)
+        run_id = store.save_run(
+            kind="compare",
+            project=project_config.project,
+            suite_name=suite.name,
+            suite_version=suite.version,
+            seed=seed,
+            alpha=resolved_alpha,
+            started_at=started_at,
+            ended_at=ended_at,
+            result=result,
+        )
+        store.close()
+        click.echo(f"run_id: {run_id}")
 
     ctx.exit(_EXIT_CODE_BY_VERDICT_LABEL[verdict.label])
 

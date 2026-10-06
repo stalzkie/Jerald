@@ -4,6 +4,7 @@ from pathlib import Path
 from click.testing import CliRunner
 
 from jerald.cli import main
+from jerald.store.store import Store
 
 
 def test_version() -> None:
@@ -130,6 +131,43 @@ def test_compare_exits_3_on_missing_config_file(tmp_path: Path) -> None:
     )
 
     assert result.exit_code == 3
+
+
+def test_compare_with_store_option_persists_the_run(tmp_path: Path) -> None:
+    suite_path, config_path = _write_suite_and_config(tmp_path, candidate_model="candidate-model")
+    store_path = tmp_path / "jerald.db"
+
+    result = CliRunner().invoke(
+        main,
+        ["compare", "--config", str(config_path), "--suite", str(suite_path),
+         "--seed", "0", "--store", str(store_path)],
+    )
+
+    assert result.exit_code == 1
+    assert "run_id:" in result.output
+    run_id = next(
+        line.split("run_id:")[1].strip() for line in result.output.splitlines() if "run_id:" in line
+    )
+
+    store = Store(store_path)
+    stored = store.get_run(run_id)
+    assert stored is not None
+    assert stored.project == "demo"
+    assert stored.suite_name == "demo-suite"
+    assert stored.verdict.label == "REGRESSION"
+    assert len(stored.trials) == 2 * 2 * 5  # 2 arms x 2 tasks x 5 trials
+    store.close()
+
+
+def test_compare_without_store_option_does_not_persist_anything(tmp_path: Path) -> None:
+    suite_path, config_path = _write_suite_and_config(tmp_path, candidate_model="candidate-model")
+
+    result = CliRunner().invoke(
+        main, ["compare", "--config", str(config_path), "--suite", str(suite_path), "--seed", "0"]
+    )
+
+    assert "run_id:" not in result.output
+    assert not (tmp_path / "jerald.db").exists()
 
 
 def test_compare_margin_pp_override_takes_precedence_over_config(tmp_path: Path) -> None:
