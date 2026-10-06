@@ -12,17 +12,19 @@ Parses a suite YAML file into `Suite(name, version, tasks, trials_per_task)`, wh
 
 Only what's already built is parsed:
 
-- **Scorers**: `exact`, `regex`, `json_schema` (the outcome family — the only Scorer family that
-  exists). A task naming any other `type` (`trajectory`, `efficiency`, `state`, `python`,
-  `shell`, judge scorers — all real spec types, none implemented yet) raises `SuiteLoadError`
-  naming the unsupported type, rather than silently skipping the task or guessing. A scorer-less
-  task is also rejected: with no Scorer, every Trial of it vacuously "passes"
-  (`all([]) is True`, per the Orchestrator's own scoring rule) and the task tests nothing — a
-  correctness trap worth catching at load time, not silently at report time.
+- **Scorers**: `exact`, `regex`, `json_schema` (the outcome family) and `trajectory` (its first
+  slice: `tool_called`/`tool_not_called`/`args_match`, see `docs/design/scorer-and-statistics.md`
+  — the only Scorer families that exist). A task naming any other `type` (`efficiency`, `state`,
+  `python`, `shell`, judge scorers — all real spec types, none implemented yet) raises
+  `SuiteLoadError` naming the unsupported type, rather than silently skipping the task or
+  guessing. A scorer-less task is also rejected: with no Scorer, every Trial of it vacuously
+  "passes" (`all([]) is True`, per the Orchestrator's own scoring rule) and the task tests
+  nothing — a correctness trap worth catching at load time, not silently at report time.
 - **Fields consumed**: `suite`, `version`, `defaults.timeout_s`, `defaults.max_steps`,
   `defaults.trials`, each task's `id`, `input.messages`, and optional per-task `timeout_s`/
   `max_steps` overrides (merged with the suite defaults exactly as `TaskSpec`'s docstring
-  describes). Each scorer's `type` plus its own keys (`expected`/`pattern`/`schema`) and optional
+  describes). Each scorer's `type` plus its own keys (`expected`/`pattern`/`schema`/
+  `tool_called`/`tool_not_called`/`args_match`) and optional
   `required`.
 - **Fields deliberately not parsed — no consumer exists for them yet, so parsing them would
   produce dead data**: `tags` (nothing implements `critical_slices`/gate policy yet), `input.env`

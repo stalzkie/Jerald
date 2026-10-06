@@ -77,6 +77,28 @@ trajectory family (`tool_called`, `args_match`, etc.) will need evidence that po
 specific step. That's deliberately deferred: this interface is sized for the outcome family
 only, and the trajectory family gets designed when it's actually built, not speculatively now.
 
+### Trajectory family (first slice)
+
+Built later than the above, once needed: `src/jerald/scorers/trajectory.py`'s single
+`trajectory()` factory, not a class hierarchy — same "factory, not subclass" shape as the
+outcome family. Unlike outcome's three *separate* top-level scorer types, the spec's own suite
+YAML example bundles `tool_called`/`tool_not_called`/`args_match` as co-equal keys on *one*
+`type: trajectory` scorer entry (see the Spec's suite file example), so this is one scorer
+checking up to three conditions with AND semantics, not three scorers. `args_match` checks the
+arguments of the step `tool_called` matched (that pairing — "the call this scorer is already
+looking at," not some unrelated call — is the only sensible reading of the two keys appearing
+together). It does a partial-key equality check (every given key must match), not the spec's
+named "JSONPath predicate" — no JSONPath library is used anywhere else in this project, and
+inventing that machinery for one field here would be the kind of speculative abstraction this
+project avoids; equality-on-named-fields covers the spec's own worked example exactly.
+Deliberately not built yet, because nothing demonstrates their shape the way the example
+demonstrates these three: `tool_order`, `no_loops`, `forbidden_effects`,
+`asked_clarification` — the suite loader raises a clear "not implemented yet" for any of them
+named as a trajectory scorer's own `type:` (they aren't — see below), but also doesn't accept
+them as `trajectory()` keys since they're unbuilt. Constructing `trajectory()` with none of the
+three keys raises `ValueError` at construction time, same fail-fast invariant as `regex`'s bad
+pattern — a scorer with nothing to check is a suite-authoring mistake, not a valid vacuous pass.
+
 ---
 
 ## Statistics engine (fixed-n paired comparison)

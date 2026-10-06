@@ -1,6 +1,6 @@
 # Jerald — progress log
 
-Status snapshot for picking this back up. Last updated 2026-10-06, after 23 commits on `main`
+Status snapshot for picking this back up. Last updated 2026-10-06, after 24 commits on `main`
 (pushed to [github.com/stalzkie/Jerald](https://github.com/stalzkie/Jerald), CI green on
 Python 3.11/3.12/3.13 throughout).
 
@@ -69,7 +69,10 @@ confirmed or overridden.
 | `jerald baseline save/list/show` | `src/jerald/cli.py` | 9 | Third real, end-to-end command — a `click.group()` with three subcommands. `save NAME` runs the baseline Arm (same machinery as `jerald run --arm baseline`) and names the resulting run; re-saving the same `NAME` replaces it. `list` prints every saved baseline, most-recently-saved first, or "No baselines saved." `show NAME` prints the Configuration's project/suite/seed plus per-task pass counts, or exits 3 naming the unknown baseline. `--suite`/`--store` on `save` are both required (checked manually, same exit-code-3 pattern as `compare`/`run`). Manually smoke-tested end-to-end against the real installed `jerald` console command. This is what the spec's "typical first session" calls directly after `plan`, before `jerald check --baseline main`. |
 | `jerald check` | `src/jerald/cli.py` | 8 | Fourth real, end-to-end command — the spec calls this "the command most people run." Runs the **candidate** Arm fresh via `run_single`; the **baseline** side is read from `store.get_baseline(name)`, not re-run — a real baseline comparison shouldn't re-spend trials on a result already saved. Calls `compare()` *directly* with both sides' per-task bool lists (not `Orchestrator.run_comparison`, which needs two live Arms to pair seeds between — here one side is already-stored data, so there's nothing to pair against at call time). Catches the suite-drifted-since-baseline-was-saved case explicitly: if the current suite's task set doesn't match the baseline's, exits 3 naming exactly which task ids are missing/extra, instead of letting `compare()`'s bare `ValueError` escape as a traceback. `--baseline`/`--suite`/`--store` are all required (manual checks, same exit-3 pattern); `--store` doubles as where the baseline is read from *and* where this check's own run (`kind="check"`) gets saved. `--budget-usd`/`--format` from the spec's flag list are not implemented (no cost tracking, no report renderer beyond plain text + `--out` JSON). Manually smoke-tested end-to-end against the real installed `jerald` console command, confirming exit code 1 on a real regression. |
 
-**114 tests total (1 skipped on win32), all passing.** `ruff check .` clean.
+| Trajectory Scorer | `src/jerald/scorers/trajectory.py` | 10 | First slice of the Trajectory family (design note in `docs/design/scorer-and-statistics.md`): one `trajectory()` factory checking `tool_called`/`tool_not_called`/`args_match` together with AND semantics — matches the spec's own suite YAML example, which bundles all three as co-equal keys on *one* `type: trajectory` scorer entry, not three separate scorer types. `args_match` does partial-key equality on the `tool_called` step's `args` (not the spec's named "JSONPath predicate" — no JSONPath library exists anywhere in this project, and the example never needs more than equality). Raises `ValueError` at construction with none of the three keys given — same fail-fast invariant as `regex`'s bad pattern. `tool_order`/`no_loops`/`forbidden_effects`/`asked_clarification` stay unbuilt: nothing demonstrates their shape the way the spec's example demonstrates these three. |
+| Suite loader (`trajectory`) | `src/jerald/suite/loader.py` | +2 | Registered `type: trajectory` in the scorer factory map. The existing "unsupported scorer type" test now exercises `type: state` instead, since `trajectory` is no longer one of the unsupported ones. |
+
+**126 tests total (1 skipped on win32), all passing.** `ruff check .` clean.
 
 ## Open decisions (never formally confirmed — currently running on my recommendations)
 
@@ -102,9 +105,13 @@ here:
    yet (what MCP client library, what transport, how `JERALD_TOOL_BASE_URL` fault injection
    applies to MCP tool calls specifically). Both loaders already raise a clear "not implemented
    yet" error for `type: mcp`, so adding it is additive once designed.
-3. **Trajectory/efficiency/state/judge Scorer families** — the suite loader already raises a
+3. **Efficiency/state/judge Scorer families, and the rest of Trajectory** (`tool_order`,
+   `no_loops`, `forbidden_effects`, `asked_clarification`) — the suite loader already raises a
    clear "not implemented yet" error for these `type:` values, so adding one is additive: a new
    entry in the loader's scorer factory registry plus the Scorer implementation itself.
+   Efficiency (`max_steps`/`max_cost_usd`/`max_latency_s`) is probably next in line — it only
+   needs `TrialResult.usage` and trajectory length, both of which already exist, no new data
+   to thread through anything first.
 4. **The rest of the CLI surface** — `jerald init`, `doctor`, `calibrate`, `plan`, `attribute`,
    `bisect`, `canary`, `stress`, `report`, `capture`, `replay`, `purge`, plus `compare`'s own
    deferred flags (`--max-trials`/`--fixed-n`, needing the sequential engine; `--budget-usd`,

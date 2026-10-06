@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from jerald.adapters.base import TrialResult, Usage
+from jerald.adapters.base import Step, TrialResult, Usage
 from jerald.suite.loader import SuiteLoadError, load_suite
 
 
@@ -10,6 +10,14 @@ def _trial(final_message: str | None) -> TrialResult:
     return TrialResult(
         trial_id="t1", task_id="task1", outcome="completed", final_message=final_message,
         trajectory=[], usage=Usage(input_tokens=0, output_tokens=0, cost_usd=0.0),
+        model_reported=None,
+    )
+
+
+def _trial_with_trajectory(steps: list[Step]) -> TrialResult:
+    return TrialResult(
+        trial_id="t1", task_id="task1", outcome="completed", final_message="done",
+        trajectory=steps, usage=Usage(input_tokens=0, output_tokens=0, cost_usd=0.0),
         model_reported=None,
     )
 
@@ -95,9 +103,33 @@ def test_load_suite_raises_when_task_has_no_scorers(tmp_path: Path) -> None:
 def test_load_suite_raises_for_unsupported_scorer_type(tmp_path: Path) -> None:
     text = _WELL_FORMED.replace(
         "      - type: exact\n        expected: 'Refunded order 4412.'\n",
-        "      - type: trajectory\n        tool_called: issue_refund\n",
+        "      - type: state\n        check: sql\n",
     )
-    with pytest.raises(SuiteLoadError, match="trajectory"):
+    with pytest.raises(SuiteLoadError, match="state"):
+        load_suite(_write(tmp_path, text))
+
+
+def test_load_suite_builds_a_working_trajectory_scorer(tmp_path: Path) -> None:
+    text = _WELL_FORMED.replace(
+        "      - type: exact\n        expected: 'Refunded order 4412.'\n",
+        "      - type: trajectory\n        tool_called: issue_refund\n"
+        "        args_match: {order_id: 4412}\n        tool_not_called: close_account\n",
+    )
+    suite = load_suite(_write(tmp_path, text))
+
+    scorer = suite.tasks[0].scorers[0]
+    step = Step(type="tool_call", name="issue_refund", args={"order_id": 4412},
+                result=None, error=None, t_start=0.0, t_end=0.1)
+    result = scorer.score(_trial_with_trajectory([step]))
+    assert result.passed is True
+
+
+def test_load_suite_raises_when_trajectory_scorer_has_no_conditions(tmp_path: Path) -> None:
+    text = _WELL_FORMED.replace(
+        "      - type: exact\n        expected: 'Refunded order 4412.'\n",
+        "      - type: trajectory\n",
+    )
+    with pytest.raises(SuiteLoadError, match="at least one"):
         load_suite(_write(tmp_path, text))
 
 
