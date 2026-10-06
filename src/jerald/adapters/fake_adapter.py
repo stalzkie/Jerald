@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
@@ -27,7 +28,8 @@ class FakeAdapter:
         self._responses = responses
         self._fail_calls = set(fail_calls)
         self._error = error if error is not None else AdapterInfrastructureError("scripted failure")
-        self._call_count = 0
+        self.call_count = 0
+        self._lock = threading.Lock()
 
     def run_trial(
         self,
@@ -36,8 +38,9 @@ class FakeAdapter:
         seed: int,
         overrides: Mapping[str, Any],
     ) -> TrialResult:
-        call_number = self._call_count
-        self._call_count += 1
+        with self._lock:
+            call_number = self.call_count
+            self.call_count += 1
         if call_number in self._fail_calls:
             raise self._error
         if callable(self._responses):

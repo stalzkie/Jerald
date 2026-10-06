@@ -1,6 +1,6 @@
 # Jerald — progress log
 
-Status snapshot for picking this back up. Last updated 2026-10-06, after 10 commits on `main`
+Status snapshot for picking this back up. Last updated 2026-10-06, after 11 commits on `main`
 (pushed to [github.com/stalzkie/Jerald](https://github.com/stalzkie/Jerald), CI green on
 Python 3.11/3.12/3.13 throughout).
 
@@ -51,7 +51,9 @@ confirmed or overridden.
 
 | FakeAdapter | `src/jerald/adapters/fake_adapter.py` | 5 | The test double named in `docs/design/adapter-contract.md`: a dict keyed by `(task_id, trial_id)` or a callable, either returning the scripted `TrialResult`. `fail_calls` scripts which 0-indexed call numbers raise an `AdapterInfrastructureError` (a default one, or one passed in via `error=`) instead, so the Orchestrator's retry loop can be tested deterministically — no network, no subprocess, no sleeping. |
 
-**40 tests total (1 skipped on win32), all passing.** `ruff check .` clean.
+| Orchestrator | `src/jerald/orchestrator/core.py` | 6 | Wires `Adapter.run_trial` → `Scorer.score` → `compare()` for the fixed-n, two-arm slice (design doc: `docs/design/orchestrator.md`). New `Task` (TaskSpec + its Scorers) and `Arm` (name + Adapter + overrides) types live here, not on the Adapter port, since the Adapter is deliberately Scorer-blind. Pairs baseline/candidate with the *same* env seed per `(task, trial_index)` — required for `compare()`'s paired bootstrap to mean anything — then shuffles submission order for interleaving. Runs jobs on a `ThreadPoolExecutor` (one global `max_concurrency`, not yet per-provider — no suite config to drive that split exists yet). Retry loop is the Adapter contract's documented usage example verbatim: retryable infra errors retry up to `max_retries` with an injectable `backoff`; agent-side failures (a `TrialResult`, not an exception) are never retried. `FakeAdapter.call_count` was made public (was `_call_count`) so these tests can assert exact retry counts. |
+
+**46 tests total (1 skipped on win32), all passing.** `ruff check .` clean.
 
 ## Open decisions (never formally confirmed — currently running on my recommendations)
 
@@ -73,17 +75,19 @@ release, a README, a announcement) happens.
 
 In rough dependency order:
 
-1. **Orchestrator** — wires `Adapter.run_trial` → `Scorer.score` → `compare()` into the actual
-   `jerald run` / `jerald compare` command loop. This is where retry-on-infra-error,
-   interleaving, and per-provider concurrency caps (all named in the spec's Execution model)
-   get built — none of that exists yet. `FakeAdapter` is ready for its tests.
-2. **CLI commands** — `jerald run`, `jerald compare` wired to real logic (currently only
+1. **CLI commands** — `jerald run`, `jerald compare` wired to the Orchestrator (currently only
    `--version`/`--help` exist). `jerald init`, `doctor`, `baseline`, `calibrate`, `plan`,
    `check`, `attribute`, `bisect`, `canary`, `stress`, `report`, `capture`, `replay`, `purge`
    are all unbuilt — intentionally deferred past the narrow MVP slice.
-3. **Suite/config loading** — nothing parses `suites/*.yaml` or `jerald.yaml` yet; `TaskSpec`
-   is currently always hand-constructed in tests.
-4. **SQLite store** — `src/jerald/store/` is an empty package; nothing is persisted yet.
+2. **Suite/config loading** — nothing parses `suites/*.yaml` or `jerald.yaml` yet; `TaskSpec`
+   and the Orchestrator's `Task`/`Arm` are currently always hand-constructed in tests. This is
+   the real blocker on wiring up `jerald compare` for real: the CLI needs something to build
+   `Task`/`Arm` lists from before it can call `Orchestrator.run_comparison`.
+3. **SQLite store** — `src/jerald/store/` is an empty package; nothing is persisted yet.
+   `ComparisonResult` carries what a store would need (the verdict plus both score matrices).
+4. **Per-provider concurrency caps** — the Orchestrator currently takes one global
+   `max_concurrency`; splitting it per-provider needs the suite config (item 2) to know which
+   provider each Arm's Adapter talks to.
 5. **`McpAdapter`** — the fourth production adapter named in the spec and in
    `docs/design/adapter-contract.md`'s registry note; not started, no design work done on it
    yet (what MCP client library, what transport, how `JERALD_TOOL_BASE_URL` fault injection
@@ -97,7 +101,8 @@ layer, reporting formats.
 
 - Spec: `Jerald Agent Degradation Harness – Spec.md` (corrected once, see commit `1d77342`)
 - Domain glossary: `CONTEXT.md`
-- Design docs: `docs/design/adapter-contract.md`, `docs/design/scorer-and-statistics.md`
+- Design docs: `docs/design/adapter-contract.md`, `docs/design/scorer-and-statistics.md`,
+  `docs/design/orchestrator.md`
 - Decision record: `docs/adr/0001-no-fault-injection-or-cancellation-in-adapter.md`
 - Fact-check notes: `research/spec-claims-verification.md`
 - This file: update it at the end of each work session, don't let it drift
