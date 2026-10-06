@@ -29,7 +29,11 @@ class Suite:
 def load_suite(path: str | Path) -> Suite:
     path = Path(path)
     try:
-        raw = yaml.safe_load(path.read_text())
+        text = path.read_text()
+    except OSError as e:
+        raise SuiteLoadError(f"{path}: could not read file: {e}") from e
+    try:
+        raw = yaml.safe_load(text)
     except yaml.YAMLError as e:
         raise SuiteLoadError(f"{path}: invalid YAML: {e}") from e
 

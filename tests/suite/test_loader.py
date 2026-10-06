@@ -106,6 +106,11 @@ def test_load_suite_raises_on_invalid_yaml_syntax(tmp_path: Path) -> None:
         load_suite(_write(tmp_path, "suite: [unterminated"))
 
 
+def test_load_suite_raises_when_file_does_not_exist(tmp_path: Path) -> None:
+    with pytest.raises(SuiteLoadError):
+        load_suite(tmp_path / "does-not-exist.yaml")
+
+
 def test_load_suite_raises_when_messages_missing(tmp_path: Path) -> None:
     text = _WELL_FORMED.replace(
         "    input:\n      messages:\n        - role: user\n          "

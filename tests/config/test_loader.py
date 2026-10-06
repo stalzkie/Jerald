@@ -109,3 +109,8 @@ def test_load_config_raises_when_baseline_config_is_missing(tmp_path: Path) -> N
 def test_load_config_raises_on_invalid_yaml_syntax(tmp_path: Path) -> None:
     with pytest.raises(ConfigLoadError):
         load_config(_write(tmp_path, "project: [unterminated"))
+
+
+def test_load_config_raises_when_file_does_not_exist(tmp_path: Path) -> None:
+    with pytest.raises(ConfigLoadError):
+        load_config(tmp_path / "does-not-exist.yaml")

@@ -1,6 +1,6 @@
 # Jerald — progress log
 
-Status snapshot for picking this back up. Last updated 2026-10-06, after 13 commits on `main`
+Status snapshot for picking this back up. Last updated 2026-10-06, after 14 commits on `main`
 (pushed to [github.com/stalzkie/Jerald](https://github.com/stalzkie/Jerald), CI green on
 Python 3.11/3.12/3.13 throughout).
 
@@ -58,7 +58,9 @@ confirmed or overridden.
 
 | Config loader | `src/jerald/config/loader.py` | 8 | Parses `jerald.yaml` (`docs/design/config-loading.md`) into `ProjectConfig(project, adapter, baseline, candidate, margin_pp, alpha)` — the Arm side, pairing with the suite loader's Task side. Builds **one** Adapter from the `adapter:` block (same AUT serves both arms; `overrides` is what tells it which Configuration to behave as) and wraps it in two `Arm`s from `configs.baseline`/`configs.candidate`. `label` is popped out of each config's entries before they become `overrides`, since it's display metadata, not one of the six Factors the Adapter contract's `overrides` field actually carries. Supports `type: http` (`url`), `type: cli` (`command: [...]`), and `type: python` (`target: "module:attr"`, an import-string convention the spec doesn't specify a shape for — chosen by analogy to Gunicorn/Celery/entry-points since nothing else suggests one); `type: mcp` raises `ConfigLoadError` naming it not implemented yet. `policy.margin_pp`/`alpha` are optional, defaulting to 3.0/0.05 (the Q2 default); `min_trials`/`max_trials`/`budget_usd`/`gate.critical_slices` are deliberately not parsed — no sequential engine, cost tracking, or tag/slice support exists yet to consume them. Also made `HttpAdapter.url`, `CliAdapter.command`, and `PythonAdapter.aut` public (were `_url`/`_command`/`_aut`) since they're an adapter's configuration, not secret state, and the config loader's tests need to assert on them. |
 
-**65 tests total (1 skipped on win32), all passing.** `ruff check .` clean.
+| `jerald compare` | `src/jerald/cli.py` | 8 | The first real, end-to-end CLI command: loads both YAML files, builds the Orchestrator, prints the `Verdict`, and maps its label to the spec's CLI reference exit codes (0 no-regression/improvement, 1 regression, 2 inconclusive). `--suite` is required but deliberately *not* `required=True` at the Click level — Click's own missing-option exit code is 2, which collides with the spec's domain meaning for 2 ("Inconclusive"); it's checked manually so a usage error reliably exits 3. `ConfigLoadError`/`SuiteLoadError` → exit 3; `AdapterInfrastructureError` → exit 4. `--dry-run` prints the resolved plan (suite, task count, trials, margin/alpha, both arms' overrides) without running anything. `--out` writes the verdict as JSON. **Not implemented**, named explicitly in the docstring rather than silently absent: `--max-trials`/`--fixed-n` (no sequential engine exists to need an escape hatch from), `--budget-usd` (no cost tracking). `jerald run` is still unbuilt — its whole point is storing trials, and the SQLite store doesn't exist yet, so building it now would be half-finished. Also fixed both loaders to wrap a missing file in `SuiteLoadError`/`ConfigLoadError` instead of letting `FileNotFoundError` escape as a raw traceback. |
+
+**74 tests total (1 skipped on win32), all passing.** `ruff check .` clean.
 
 ## Open decisions (never formally confirmed — currently running on my recommendations)
 
@@ -80,17 +82,12 @@ release, a README, a announcement) happens.
 
 In rough dependency order:
 
-1. **CLI commands** — `jerald run`, `jerald compare` wired to the Orchestrator using both
-   loaders (currently only `--version`/`--help` exist). Both halves of the input side are now
-   done: `load_suite(...)` gives the Task list, `load_config(...)` gives the Adapter/Arms/
-   margin/alpha — `jerald compare` becomes "load both, call `Orchestrator.run_comparison` with
-   the suite's `trials_per_task`, print the `Verdict`, map it to an exit code per the spec's
-   CLI reference table (0 no-regression/improvement, 1 regression, 2 inconclusive, 3 config
-   error, 4 infra failure)." `jerald init`, `doctor`, `baseline`, `calibrate`, `plan`, `check`,
-   `attribute`, `bisect`, `canary`, `stress`, `report`, `capture`, `replay`, `purge` are all
-   unbuilt — intentionally deferred past the narrow MVP slice.
-2. **SQLite store** — `src/jerald/store/` is an empty package; nothing is persisted yet.
+1. **SQLite store** — `src/jerald/store/` is an empty package; nothing is persisted yet.
    `ComparisonResult` carries what a store would need (the verdict plus both score matrices).
+   This unblocks `jerald run` (its whole point is storing trials) and `jerald baseline`/
+   `check`/`report`/`replay`/`purge`, all of which need a stored Run to act on.
+2. **`jerald run`** — needs the store (item 1). Until then `jerald compare` is the only
+   working command.
 3. **Per-provider concurrency caps** — the Orchestrator currently takes one global
    `max_concurrency`; splitting it per-provider needs the config loader to carry which
    provider each Arm's Adapter talks to, which it doesn't today (one Adapter, shared by both
@@ -103,6 +100,11 @@ In rough dependency order:
 5. **Trajectory/efficiency/state/judge Scorer families** — the suite loader already raises a
    clear "not implemented yet" error for these `type:` values, so adding one is additive: a new
    entry in the loader's scorer factory registry plus the Scorer implementation itself.
+6. **The rest of the CLI surface** — `jerald init`, `doctor`, `baseline`, `calibrate`, `plan`,
+   `check`, `attribute`, `bisect`, `canary`, `stress`, `report`, `capture`, `replay`, `purge`,
+   plus `compare`'s own deferred flags (`--max-trials`/`--fixed-n`, needing the sequential
+   engine; `--budget-usd`, needing cost tracking) — all intentionally deferred past the narrow
+   MVP slice, all unblocked by different future items on this list, not by each other.
 
 Not started at all: trajectory/efficiency/judge Scorer families, the sequential
 rounds/alpha-spending engine, fault injection, canaries, attribution, bisect, the sandbox/proxy
