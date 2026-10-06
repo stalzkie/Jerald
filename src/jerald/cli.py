@@ -284,5 +284,151 @@ def run(
     ctx.exit(EXIT_NO_REGRESSION)
 
 
+@main.group()
+def baseline() -> None:
+    """Save, list, or show a named baseline (a configuration plus its per-task results)."""
+
+
+@baseline.command("save")
+@click.argument("name")
+@click.option(
+    "--config", "config_path", default="jerald.yaml", show_default=True,
+    type=click.Path(path_type=Path), help="Path to jerald.yaml.",
+)
+@click.option(
+    "--suite", "suite_path", default=None,
+    type=click.Path(path_type=Path), help="Path to the suite YAML file.",
+)
+@click.option("--trials", "trials", default=None, type=int, help="Override the suite's defaults.trials.")
+@click.option("--seed", default=0, type=int, show_default=True, help="Top-level run seed.")
+@click.option(
+    "--parallel", default=4, type=int, show_default=True, help="Maximum concurrent trials.",
+)
+@click.option(
+    "--store", "store_path", default=None,
+    type=click.Path(path_type=Path), help="SQLite store to save the baseline into.",
+)
+@click.pass_context
+def baseline_save(
+    ctx: click.Context,
+    name: str,
+    config_path: Path,
+    suite_path: Path | None,
+    trials: int | None,
+    seed: int,
+    parallel: int,
+    store_path: Path | None,
+) -> None:
+    """Run the baseline Configuration and save its result under NAME.
+
+    Saving again under the same NAME replaces what it points to -- a named
+    baseline means "the current main" (or whatever NAME represents), not an
+    append-only history of runs by that name.
+    """
+    if suite_path is None:
+        click.echo("Error: --suite is required.", err=True)
+        ctx.exit(EXIT_USAGE_ERROR)
+
+    if store_path is None:
+        click.echo("Error: --store is required.", err=True)
+        ctx.exit(EXIT_USAGE_ERROR)
+
+    try:
+        project_config = load_config(config_path)
+    except ConfigLoadError as e:
+        click.echo(f"Error: {e}", err=True)
+        ctx.exit(EXIT_USAGE_ERROR)
+
+    try:
+        suite = load_suite(suite_path)
+    except SuiteLoadError as e:
+        click.echo(f"Error: {e}", err=True)
+        ctx.exit(EXIT_USAGE_ERROR)
+
+    trials_per_task = trials if trials is not None else suite.trials_per_task
+
+    orchestrator = Orchestrator(max_concurrency=parallel)
+    started_at = datetime.now(UTC)
+    try:
+        result = orchestrator.run_single(
+            suite.tasks, project_config.baseline, trials_per_task=trials_per_task, seed=seed
+        )
+    except AdapterInfrastructureError as e:
+        click.echo(f"Infrastructure failure: {e}", err=True)
+        ctx.exit(EXIT_INFRASTRUCTURE_FAILURE)
+    ended_at = datetime.now(UTC)
+
+    for task_id, scores in result.scores.items():
+        click.echo(f"{task_id}: {sum(scores)}/{len(scores)} passed")
+
+    store = Store(store_path)
+    run_id = store.save_run(
+        kind="baseline",
+        project=project_config.project,
+        suite_name=suite.name,
+        suite_version=suite.version,
+        seed=seed,
+        alpha=project_config.alpha,
+        started_at=started_at,
+        ended_at=ended_at,
+        trials=result.trials,
+        verdict=None,
+    )
+    store.save_baseline(name=name, run_id=run_id, saved_at=ended_at)
+    store.close()
+    click.echo(f"baseline '{name}' saved (run_id: {run_id})")
+
+    ctx.exit(EXIT_NO_REGRESSION)
+
+
+@baseline.command("list")
+@click.option(
+    "--store", "store_path", required=True,
+    type=click.Path(path_type=Path), help="SQLite store to list baselines from.",
+)
+def baseline_list(store_path: Path) -> None:
+    """List saved baselines, most recently saved first."""
+    store = Store(store_path)
+    summaries = store.list_baselines()
+    store.close()
+
+    if not summaries:
+        click.echo("No baselines saved.")
+        return
+
+    for s in summaries:
+        click.echo(f"{s.name}\t{s.suite_name}\t{s.saved_at.isoformat()}\trun_id={s.run_id}")
+
+
+@baseline.command("show")
+@click.argument("name")
+@click.option(
+    "--store", "store_path", required=True,
+    type=click.Path(path_type=Path), help="SQLite store to read the baseline from.",
+)
+@click.pass_context
+def baseline_show(ctx: click.Context, name: str, store_path: Path) -> None:
+    """Show a named baseline's configuration and per-task results."""
+    store = Store(store_path)
+    stored = store.get_baseline(name)
+    store.close()
+
+    if stored is None:
+        click.echo(f"Error: no baseline named '{name}'.", err=True)
+        ctx.exit(EXIT_USAGE_ERROR)
+
+    click.echo(f"name: {name}")
+    click.echo(f"project: {stored.project}")
+    click.echo(f"suite: {stored.suite_name} (v{stored.suite_version})")
+    click.echo(f"seed: {stored.seed}")
+    click.echo(f"saved: {stored.ended_at.isoformat()}")
+
+    per_task: dict[str, list[bool]] = {}
+    for r in stored.trials:
+        per_task.setdefault(r.task_id, []).append(r.passed)
+    for task_id, scores in per_task.items():
+        click.echo(f"{task_id}: {sum(scores)}/{len(scores)} passed")
+
+
 if __name__ == "__main__":
     main()

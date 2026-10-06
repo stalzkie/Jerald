@@ -294,3 +294,116 @@ def test_run_exits_3_on_missing_config_file(tmp_path: Path) -> None:
     )
 
     assert result.exit_code == 3
+
+
+def test_baseline_save_persists_and_names_a_run(tmp_path: Path) -> None:
+    suite_path, config_path = _write_suite_and_config(tmp_path, candidate_model="candidate-model")
+    store_path = tmp_path / "jerald.db"
+
+    result = CliRunner().invoke(
+        main,
+        ["baseline", "save", "main", "--config", str(config_path), "--suite", str(suite_path),
+         "--store", str(store_path), "--seed", "0"],
+    )
+
+    assert result.exit_code == 0
+    assert "main" in result.output
+
+    store = Store(store_path)
+    stored = store.get_baseline("main")
+    assert stored is not None
+    assert stored.kind == "baseline"
+    assert len(stored.trials) == 2 * 5  # 2 tasks x 5 trials (suite default)
+    assert all(r.passed for r in stored.trials)  # baseline-model always matches "ok"
+    store.close()
+
+
+def test_baseline_save_with_same_name_replaces_the_previous_run(tmp_path: Path) -> None:
+    suite_path, config_path = _write_suite_and_config(tmp_path, candidate_model="candidate-model")
+    store_path = tmp_path / "jerald.db"
+    common_args = ["--config", str(config_path), "--suite", str(suite_path),
+                   "--store", str(store_path)]
+
+    CliRunner().invoke(main, ["baseline", "save", "main", *common_args, "--seed", "0"])
+    CliRunner().invoke(main, ["baseline", "save", "main", *common_args, "--seed", "1"])
+
+    store = Store(store_path)
+    assert len(store.list_baselines()) == 1
+    store.close()
+
+
+def test_baseline_list_prints_saved_baselines(tmp_path: Path) -> None:
+    suite_path, config_path = _write_suite_and_config(tmp_path, candidate_model="candidate-model")
+    store_path = tmp_path / "jerald.db"
+    common_args = ["--config", str(config_path), "--suite", str(suite_path),
+                   "--store", str(store_path)]
+
+    CliRunner().invoke(main, ["baseline", "save", "main", *common_args])
+    CliRunner().invoke(main, ["baseline", "save", "release-1", *common_args])
+
+    result = CliRunner().invoke(main, ["baseline", "list", "--store", str(store_path)])
+
+    assert result.exit_code == 0
+    assert "main" in result.output
+    assert "release-1" in result.output
+
+
+def test_baseline_list_with_no_baselines_prints_a_helpful_message(tmp_path: Path) -> None:
+    store_path = tmp_path / "jerald.db"
+    Store(store_path).close()
+
+    result = CliRunner().invoke(main, ["baseline", "list", "--store", str(store_path)])
+
+    assert result.exit_code == 0
+    assert "no baselines" in result.output.lower()
+
+
+def test_baseline_show_prints_per_task_pass_counts(tmp_path: Path) -> None:
+    suite_path, config_path = _write_suite_and_config(tmp_path, candidate_model="candidate-model")
+    store_path = tmp_path / "jerald.db"
+
+    CliRunner().invoke(
+        main,
+        ["baseline", "save", "main", "--config", str(config_path), "--suite", str(suite_path),
+         "--store", str(store_path)],
+    )
+    result = CliRunner().invoke(main, ["baseline", "show", "main", "--store", str(store_path)])
+
+    assert result.exit_code == 0
+    assert "task-1" in result.output
+    assert "5/5" in result.output
+
+
+def test_baseline_show_unknown_name_exits_3(tmp_path: Path) -> None:
+    store_path = tmp_path / "jerald.db"
+    Store(store_path).close()
+
+    result = CliRunner().invoke(main, ["baseline", "show", "missing", "--store", str(store_path)])
+
+    assert result.exit_code == 3
+    assert "missing" in result.output
+
+
+def test_baseline_save_requires_suite_flag(tmp_path: Path) -> None:
+    _, config_path = _write_suite_and_config(tmp_path, candidate_model="candidate-model")
+
+    result = CliRunner().invoke(
+        main,
+        ["baseline", "save", "main", "--config", str(config_path),
+         "--store", str(tmp_path / "jerald.db")],
+    )
+
+    assert result.exit_code == 3
+    assert "--suite" in result.output
+
+
+def test_baseline_save_requires_store_flag(tmp_path: Path) -> None:
+    suite_path, config_path = _write_suite_and_config(tmp_path, candidate_model="candidate-model")
+
+    result = CliRunner().invoke(
+        main,
+        ["baseline", "save", "main", "--config", str(config_path), "--suite", str(suite_path)],
+    )
+
+    assert result.exit_code == 3
+    assert "--store" in result.output

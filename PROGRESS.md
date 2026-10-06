@@ -1,6 +1,6 @@
 # Jerald — progress log
 
-Status snapshot for picking this back up. Last updated 2026-10-06, after 20 commits on `main`
+Status snapshot for picking this back up. Last updated 2026-10-06, after 22 commits on `main`
 (pushed to [github.com/stalzkie/Jerald](https://github.com/stalzkie/Jerald), CI green on
 Python 3.11/3.12/3.13 throughout).
 
@@ -65,8 +65,10 @@ confirmed or overridden.
 | `Orchestrator.run_single` | `src/jerald/orchestrator/core.py` | 4 | `jerald run`'s method: one Configuration, no comparison, so no `Verdict` and no seed-pairing. Shares retry/concurrency/scoring with `run_comparison` via a new private `_run_jobs(jobs)` both call. Returns `SingleRunResult(scores, trials)` — `ComparisonResult`'s single-arm counterpart. |
 | `jerald compare --store` | `src/jerald/cli.py` | 2 | Wired `compare` to the store: `--store PATH` persists the run and prints `run_id: <uuid>`; omitted, nothing is written — opt-in, since a default path under the CWD would mean `compare` silently writes a file next to wherever it's invoked. Closes the loop the spec names directly: "every verdict can be traced to its trials." |
 | `jerald run` | `src/jerald/cli.py` | 7 | Second real, end-to-end command. `--arm {baseline,candidate}` (default `baseline`) selects which `configs:` entry to run — not a spec-named flag (there's no `jerald baseline`/`init` yet to otherwise supply a default Configuration), added because *something* has to pick one. `--trials N` overrides the suite's `defaults.trials` (spec-named, `run`-specific). Unlike `compare`, `--store` is **required**, not opt-in: per the spec, storing trials is the entire point of `run`; a run that persists nothing would do nothing useful. `--dry-run` still works without `--store` (nothing to persist when nothing runs). No `Verdict` to print or map to an exit code — prints each task's pass count instead, always exits 0 on success (agent failures are data, not a CLI failure, same principle as "never retried because they are the data"). Manually smoke-tested against the real installed `jerald` console command, not just `CliRunner`. |
+| Store `baselines` | `src/jerald/store/store.py` | 4 | `save_baseline`/`get_baseline`/`list_baselines` on top of a new `baselines` table (`name` PRIMARY KEY, `run_id`, `saved_at`) — a thin name→run_id pointer, not a spec-named table. `save_baseline` is `INSERT OR REPLACE`: re-saving a name moves what it points to, matching "main" meaning *the current* main, not a history. Scoped globally within one store file, not per-project (documented, accepted limitation — one store file per project is the only setup this CLI produces). |
+| `jerald baseline save/list/show` | `src/jerald/cli.py` | 9 | Third real, end-to-end command — a `click.group()` with three subcommands. `save NAME` runs the baseline Arm (same machinery as `jerald run --arm baseline`) and names the resulting run; re-saving the same `NAME` replaces it. `list` prints every saved baseline, most-recently-saved first, or "No baselines saved." `show NAME` prints the Configuration's project/suite/seed plus per-task pass counts, or exits 3 naming the unknown baseline. `--suite`/`--store` on `save` are both required (checked manually, same exit-code-3 pattern as `compare`/`run`). Manually smoke-tested end-to-end against the real installed `jerald` console command. This is what the spec's "typical first session" calls directly after `plan`, before `jerald check --baseline main` — which is next. |
 
-**94 tests total (1 skipped on win32), all passing.** `ruff check .` clean.
+**106 tests total (1 skipped on win32), all passing.** `ruff check .` clean.
 
 ## Open decisions (never formally confirmed — currently running on my recommendations)
 
@@ -88,28 +90,26 @@ release, a README, a announcement) happens.
 
 In rough dependency order:
 
-1. **`jerald baseline save/list/show`** — now unblocked: `jerald run --store` persists a Run,
-   so `baseline save <name>` can run the baseline Arm and tag the resulting run with a name
-   (needs a small schema addition — a `baselines` table or a `name` column on `runs` — to
-   remember which run a name points to). This is the real next step toward `jerald check`,
-   which the spec calls "the command most people run."
-2. **`jerald check`** — needs `baseline` (item 1): "compare the working tree with a named
-   baseline." Likely `load_config` + `load_suite` + look up the named baseline's stored Run +
-   run the candidate Arm fresh + feed both into `compare()` directly (not
-   `Orchestrator.run_comparison`, since one side is already-stored scores, not a live Arm).
-3. **Per-provider concurrency caps** — the Orchestrator currently takes one global
+1. **`jerald check`** — now unblocked: "compare the working tree with a named baseline and set
+   the exit code" — the spec calls this "the command most people run." Needs `load_config` +
+   `load_suite` + `store.get_baseline(name)` for the stored side, run the candidate Arm fresh
+   for the live side, then feed both into `compare()` *directly* (not
+   `Orchestrator.run_comparison`, since the baseline side is already-stored per-task bool
+   lists, not a live Arm to call `run_trial` against — `compare()` takes exactly that shape
+   already, so this is a direct call, not a new engine). Exit codes 0/1/2 same as `compare`.
+2. **Per-provider concurrency caps** — the Orchestrator currently takes one global
    `max_concurrency`; splitting it per-provider needs the config loader to carry which
    provider each Arm's Adapter talks to, which it doesn't today (one Adapter, shared by both
    Arms — there's only ever one provider per comparison in this slice).
-4. **`McpAdapter`** — the fourth production adapter named in the spec and in
+3. **`McpAdapter`** — the fourth production adapter named in the spec and in
    `docs/design/adapter-contract.md`'s registry note; not started, no design work done on it
    yet (what MCP client library, what transport, how `JERALD_TOOL_BASE_URL` fault injection
    applies to MCP tool calls specifically). Both loaders already raise a clear "not implemented
    yet" error for `type: mcp`, so adding it is additive once designed.
-5. **Trajectory/efficiency/state/judge Scorer families** — the suite loader already raises a
+4. **Trajectory/efficiency/state/judge Scorer families** — the suite loader already raises a
    clear "not implemented yet" error for these `type:` values, so adding one is additive: a new
    entry in the loader's scorer factory registry plus the Scorer implementation itself.
-6. **The rest of the CLI surface** — `jerald init`, `doctor`, `calibrate`, `plan`, `attribute`,
+5. **The rest of the CLI surface** — `jerald init`, `doctor`, `calibrate`, `plan`, `attribute`,
    `bisect`, `canary`, `stress`, `report`, `capture`, `replay`, `purge`, plus `compare`'s own
    deferred flags (`--max-trials`/`--fixed-n`, needing the sequential engine; `--budget-usd`,
    needing cost tracking) — all intentionally deferred past the narrow MVP slice.
