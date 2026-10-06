@@ -34,10 +34,22 @@ class Arm:
 
 
 @dataclass(frozen=True)
+class TrialRecord:
+    task_id: str
+    arm_name: str
+    trial_index: int
+    seed: int
+    trial: TrialResult
+    scores: Sequence[ScoreResult]
+    passed: bool
+
+
+@dataclass(frozen=True)
 class ComparisonResult:
     verdict: Verdict
     baseline_scores: Mapping[str, Sequence[bool]]
     candidate_scores: Mapping[str, Sequence[bool]]
+    trials: Sequence[TrialRecord]
 
 
 class Orchestrator:
@@ -85,9 +97,15 @@ class Orchestrator:
 - **Scoring.** A Trial passes its Task when every `required` Scorer passes it — the exact rule
   from `docs/design/scorer-and-statistics.md`'s usage example, applied per Trial here instead of
   written out at each call site.
-- **Output.** `ComparisonResult` carries the per-task-per-arm pass/fail matrices alongside the
-  `Verdict` so a future reporting/storage layer has what it needs — the Orchestrator itself does
-  no I/O or persistence (the SQLite store is still an empty package; that's its own future slice).
+- **Output.** `ComparisonResult` carries the per-task-per-arm pass/fail matrices (what
+  `compare()` needs) *and* a sorted `Sequence[TrialRecord]` — one per job, each holding the full
+  `TrialResult`, every `ScoreResult`, and the env seed used — so a future store/report layer has
+  what it needs without re-deriving it. `baseline_scores`/`candidate_scores` are a lossy
+  projection of `trials` kept because `compare()`'s signature wants exactly that shape; `trials`
+  is the record persistence actually consumes. Sorted by `(task_id, arm_name, trial_index)`
+  before returning so the result is deterministic regardless of which thread finished first. The
+  Orchestrator itself still does no I/O or persistence — it only shapes the data a store would
+  need.
 
 ## What's deliberately out of scope here
 

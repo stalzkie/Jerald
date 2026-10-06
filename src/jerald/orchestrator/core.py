@@ -10,7 +10,7 @@ from typing import Any
 
 from jerald.adapters.base import Adapter, AdapterInfrastructureError, TaskSpec, TrialResult
 from jerald.analysis.compare import Verdict, compare
-from jerald.scorers.base import Scorer
+from jerald.scorers.base import Scorer, ScoreResult
 
 
 @dataclass(frozen=True)
@@ -27,19 +27,36 @@ class Arm:
 
 
 @dataclass(frozen=True)
+class TrialRecord:
+    """Everything one Trial produced, kept around for a future store/report
+    layer to consume — the aggregate bool in baseline_scores/candidate_scores
+    is what compare() needs, this is what persistence would need."""
+
+    task_id: str
+    arm_name: str
+    trial_index: int
+    seed: int
+    trial: TrialResult
+    scores: Sequence[ScoreResult]
+    passed: bool
+
+
+@dataclass(frozen=True)
 class ComparisonResult:
     verdict: Verdict
     baseline_scores: Mapping[str, Sequence[bool]]
     candidate_scores: Mapping[str, Sequence[bool]]
+    trials: Sequence[TrialRecord]
 
 
 def _default_backoff(attempt: int) -> None:
     time.sleep(min(2**attempt * 0.1, 2.0))
 
 
-def _task_passed(scorers: Sequence[Scorer], trial: TrialResult) -> bool:
-    results = [s.score(trial) for s in scorers]
-    return all(r.passed for r in results if r.required)
+def _score_trial(scorers: Sequence[Scorer], trial: TrialResult) -> tuple[list[ScoreResult], bool]:
+    scores = [s.score(trial) for s in scorers]
+    passed = all(r.passed for r in scores if r.required)
+    return scores, passed
 
 
 class Orchestrator:
@@ -85,16 +102,21 @@ class Orchestrator:
 
         baseline_scores: dict[str, list[bool]] = {task.spec.task_id: [] for task in tasks}
         candidate_scores: dict[str, list[bool]] = {task.spec.task_id: [] for task in tasks}
+        trial_records: list[TrialRecord] = []
         lock = threading.Lock()
 
         def run_job(task: Task, arm: Arm, trial_index: int) -> None:
             trial_id = f"{task.spec.task_id}:{arm.name}:{trial_index}"
             env_seed = env_seeds[(task.spec.task_id, trial_index)]
             trial = self._execute_with_retry(arm.adapter, task.spec, trial_id, env_seed, arm.overrides)
-            passed = _task_passed(task.scorers, trial)
+            scores, passed = _score_trial(task.scorers, trial)
             target = baseline_scores if arm is baseline else candidate_scores
             with lock:
                 target[task.spec.task_id].append(passed)
+                trial_records.append(TrialRecord(
+                    task_id=task.spec.task_id, arm_name=arm.name, trial_index=trial_index,
+                    seed=env_seed, trial=trial, scores=scores, passed=passed,
+                ))
 
         # A raised AdapterInfrastructureError propagates as soon as any job's
         # future completes with it; threads already running cannot be killed
@@ -104,6 +126,8 @@ class Orchestrator:
             futures = [pool.submit(run_job, *job) for job in jobs]
             for future in as_completed(futures):
                 future.result()
+
+        trial_records.sort(key=lambda r: (r.task_id, r.arm_name, r.trial_index))
 
         verdict = compare(
             baseline_scores=baseline_scores,
@@ -117,6 +141,7 @@ class Orchestrator:
             verdict=verdict,
             baseline_scores=baseline_scores,
             candidate_scores=candidate_scores,
+            trials=trial_records,
         )
 
     def _execute_with_retry(

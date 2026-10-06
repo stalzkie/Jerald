@@ -42,6 +42,30 @@ def test_orchestrator_reports_regression_when_candidate_always_fails() -> None:
         assert result.candidate_scores[task.spec.task_id] == [False] * 5
 
 
+def test_orchestrator_result_includes_sorted_per_trial_records() -> None:
+    orchestrator = Orchestrator(max_concurrency=2, backoff=lambda attempt: None)
+    baseline = Arm(name="baseline", adapter=FakeAdapter(_responder("ok")), overrides={})
+    candidate = Arm(name="candidate", adapter=FakeAdapter(_responder("bad")), overrides={})
+
+    result = orchestrator.run_comparison(
+        [_task("task_0")], baseline, candidate, trials_per_task=2, seed=0, n_bootstrap=50
+    )
+
+    assert len(result.trials) == 4
+    assert [(r.arm_name, r.trial_index) for r in result.trials] == [
+        ("baseline", 0), ("baseline", 1), ("candidate", 0), ("candidate", 1),
+    ]
+    baseline_records = [r for r in result.trials if r.arm_name == "baseline"]
+    candidate_records = [r for r in result.trials if r.arm_name == "candidate"]
+    assert all(r.task_id == "task_0" for r in result.trials)
+    assert all(r.passed and r.trial.final_message == "ok" for r in baseline_records)
+    assert all(not r.passed and r.trial.final_message == "bad" for r in candidate_records)
+    assert all(len(r.scores) == 1 for r in result.trials)
+    # same (task, trial_index) pairing as baseline_scores/candidate_scores
+    assert baseline_records[0].seed == candidate_records[0].seed
+    assert baseline_records[1].seed == candidate_records[1].seed
+
+
 def test_orchestrator_shares_the_env_seed_between_arms_for_the_same_trial_index() -> None:
     seen_baseline: dict[int, int] = {}
     seen_candidate: dict[int, int] = {}
