@@ -1,6 +1,6 @@
 # Jerald — progress log
 
-Status snapshot for picking this back up. Last updated 2026-10-06, after 8 commits on `main`
+Status snapshot for picking this back up. Last updated 2026-10-06, after 9 commits on `main`
 (pushed to [github.com/stalzkie/Jerald](https://github.com/stalzkie/Jerald), CI green on
 Python 3.11/3.12/3.13 throughout).
 
@@ -47,8 +47,9 @@ confirmed or overridden.
 | Statistics engine | `src/jerald/analysis/compare.py` | 5 | Fixed-n two-level paired bootstrap; task-set invariant, all three verdict outcomes, seed-determinism |
 | PythonAdapter | `src/jerald/adapters/python_adapter.py` | 5 | Wraps a plain `run(task, config, seed)` call: success, AUT exceptions → `agent_error` (never propagated), `timeout_s` enforcement, `max_steps_exceeded` detection. **Found and fixed a real bug**: a shared single-worker thread pool let a timed-out call's lingering thread block every later call on the same adapter instance — pinned with a timing assertion, fixed by giving each call its own disposable worker. |
 | CliAdapter | `src/jerald/adapters/cli_adapter.py` | 6 (+1 skipped on Windows) | JSON on stdin/stdout of a subprocess, per `docs/design/adapter-contract.md`. Non-zero exit → `AdapterInfrastructureError(retryable=True)` (process crash, might be transient); malformed JSON on stdout with exit 0 → `AdapterInfrastructureError(retryable=False)` (wire-schema bug, retrying won't help); exit 0 with an in-band `"error"` field → `agent_error` outcome, never an exception. Timeout escalates `terminate()` (SIGTERM on POSIX) → wait `kill_grace_s` → `kill()` (SIGKILL) if still alive. The SIGTERM-ignored escalation test is `skipif(win32)`: Windows has no catchable SIGTERM — `Popen.terminate()` is an unconditional `TerminateProcess` there, so the escalation path can only be observed on the Linux CI matrix, not on a Windows dev machine. |
+| HttpAdapter | `src/jerald/adapters/http_adapter.py` | 10 | POSTs the spec's exact wire shape (`task_id`, `trial_id`, `messages`, `env.seed`, `overrides`) and parses `final_message`/`trajectory`/`model_reported`/in-band `error`. Added `httpx>=0.27` as a real dependency (decided over `requests`: native per-request timeout, no separate `responses`-style mocking library needed — tests use `httpx.MockTransport` injected via a `client` constructor param, no real server). 5xx and 429 → `AdapterInfrastructureError(retryable=True)` (429 called out because the spec's own fault-injection table (§Tool, transient error) names 429/503 as the transient pair); other 4xx → `retryable=False`; connection failure → `retryable=True`; malformed JSON body → `retryable=False`; `httpx.TimeoutException` → `outcome="timeout"` (data, not an exception, matching the Adapter contract's timeout rule). |
 
-**25 tests total (1 skipped on win32), all passing.** `ruff check .` clean.
+**35 tests total (1 skipped on win32), all passing.** `ruff check .` clean.
 
 ## Open decisions (never formally confirmed — currently running on my recommendations)
 
@@ -57,7 +58,7 @@ From the grilling round, still awaiting your answer or override:
 - **Q1 License**: Apache-2.0 (in LICENSE/pyproject.toml already)
 - **Q2 Default margin**: 3pp fixed default (implemented as `compare()`'s default)
 - **Q3 Judge scorers on the gate**: kept the spec's conditional rule (calibrated + ≥0.9 agreement) — not yet implemented, just not contradicted
-- **Q4 First adapter**: Python adapter built first ✅, CliAdapter second ✅ — HTTP next, per this recommendation
+- **Q4 First adapter**: Python adapter built first ✅, CliAdapter second ✅, HttpAdapter third ✅ — `mcp` is the only production adapter left unbuilt
 - **Q5 MVP starting point**: narrow slice (fixed-n compare, outcome scorers, python adapter) before the sequential engine — this is the plan everything below assumes
 - **Q6 Validation rigor**: not yet relevant — no public claims have been made
 - **Q7 Pace/resourcing**: assumed solo + illustrative timeline — unconfirmed
@@ -70,22 +71,24 @@ release, a README, a announcement) happens.
 
 In rough dependency order:
 
-1. **`HttpAdapter`** — needs an HTTP client dependency decision first (`httpx` vs `requests`;
-   `httpx` has native timeout and async-readiness going for it). Needs a mock transport for
-   tests (`httpx`'s `MockTransport` or `responses`) rather than a real server.
-2. **`FakeAdapter`** — the test double named in `docs/design/adapter-contract.md`, needed once
-   the Orchestrator (next item) has tests of its own.
-3. **Orchestrator** — wires `Adapter.run_trial` → `Scorer.score` → `compare()` into the actual
+1. **`FakeAdapter`** — the test double named in `docs/design/adapter-contract.md`, needed once
+   the Orchestrator (next item) has tests of its own. Should be able to script a scripted
+   `AdapterInfrastructureError` on the Nth call to exercise retry logic deterministically.
+2. **Orchestrator** — wires `Adapter.run_trial` → `Scorer.score` → `compare()` into the actual
    `jerald run` / `jerald compare` command loop. This is where retry-on-infra-error,
    interleaving, and per-provider concurrency caps (all named in the spec's Execution model)
    get built — none of that exists yet.
-4. **CLI commands** — `jerald run`, `jerald compare` wired to real logic (currently only
+3. **CLI commands** — `jerald run`, `jerald compare` wired to real logic (currently only
    `--version`/`--help` exist). `jerald init`, `doctor`, `baseline`, `calibrate`, `plan`,
    `check`, `attribute`, `bisect`, `canary`, `stress`, `report`, `capture`, `replay`, `purge`
    are all unbuilt — intentionally deferred past the narrow MVP slice.
-5. **Suite/config loading** — nothing parses `suites/*.yaml` or `jerald.yaml` yet; `TaskSpec`
+4. **Suite/config loading** — nothing parses `suites/*.yaml` or `jerald.yaml` yet; `TaskSpec`
    is currently always hand-constructed in tests.
-6. **SQLite store** — `src/jerald/store/` is an empty package; nothing is persisted yet.
+5. **SQLite store** — `src/jerald/store/` is an empty package; nothing is persisted yet.
+6. **`McpAdapter`** — the fourth production adapter named in the spec and in
+   `docs/design/adapter-contract.md`'s registry note; not started, no design work done on it
+   yet (what MCP client library, what transport, how `JERALD_TOOL_BASE_URL` fault injection
+   applies to MCP tool calls specifically).
 
 Not started at all: trajectory/efficiency/judge Scorer families, the sequential
 rounds/alpha-spending engine, fault injection, canaries, attribution, bisect, the sandbox/proxy
