@@ -1,6 +1,6 @@
 # Jerald — progress log
 
-Status snapshot for picking this back up. Last updated 2026-10-06, after 17 commits on `main`
+Status snapshot for picking this back up. Last updated 2026-10-06, after 20 commits on `main`
 (pushed to [github.com/stalzkie/Jerald](https://github.com/stalzkie/Jerald), CI green on
 Python 3.11/3.12/3.13 throughout).
 
@@ -61,11 +61,12 @@ confirmed or overridden.
 | `jerald compare` | `src/jerald/cli.py` | 8 | The first real, end-to-end CLI command: loads both YAML files, builds the Orchestrator, prints the `Verdict`, and maps its label to the spec's CLI reference exit codes (0 no-regression/improvement, 1 regression, 2 inconclusive). `--suite` is required but deliberately *not* `required=True` at the Click level — Click's own missing-option exit code is 2, which collides with the spec's domain meaning for 2 ("Inconclusive"); it's checked manually so a usage error reliably exits 3. `ConfigLoadError`/`SuiteLoadError` → exit 3; `AdapterInfrastructureError` → exit 4. `--dry-run` prints the resolved plan (suite, task count, trials, margin/alpha, both arms' overrides) without running anything. `--out` writes the verdict as JSON. **Not implemented**, named explicitly in the docstring rather than silently absent: `--max-trials`/`--fixed-n` (no sequential engine exists to need an escape hatch from), `--budget-usd` (no cost tracking). `jerald run` is still unbuilt — its whole point is storing trials, and the SQLite store doesn't exist yet, so building it now would be half-finished. Also fixed both loaders to wrap a missing file in `SuiteLoadError`/`ConfigLoadError` instead of letting `FileNotFoundError` escape as a raw traceback. |
 
 | `ComparisonResult.trials` | `src/jerald/orchestrator/core.py` | +1 | Small widening needed by the store: added `TrialRecord` (task_id, arm_name, trial_index, seed, the full `TrialResult`, every `ScoreResult`, `passed`) and a sorted `ComparisonResult.trials: Sequence[TrialRecord]`. `baseline_scores`/`candidate_scores` stay as the lossy bool-only projection `compare()` needs; `trials` is the full record a store needs. Sorted by `(task_id, arm_name, trial_index)` so the result is deterministic regardless of thread completion order. |
-| SQLite store | `src/jerald/store/store.py` | 5 | Persists exactly what `ComparisonResult` produces (design in `docs/design/store.md`) — deliberately 2 tables, not the spec's 5 (`runs`/`trials`/`steps`/`scores`/`verdicts`): `runs` (one row per `run_comparison` call, the `Verdict`'s fields flattened in) and `trials` (one row per `TrialRecord`, with `trajectory_json`/`scores_json` JSON columns standing in for the spec's separate `steps`/`scores` tables — normalizing those only pays off once something queries across trials by step/scorer, which nothing does yet). `suites`/`tasks`/`configs`/`noise_profiles`/`canary_points` are out of scope entirely — no content-hashing, `calibrate`, or `canary` exists to need them. `PRAGMA journal_mode=WAL` per the spec's storage line, verified via a `journal_mode()` method rather than poking `_connection` from a test. `save_run(result=...)` takes the Orchestrator's `ComparisonResult` directly — the caller's job is "run it, then save it," not "run it, reshape it, then save it." |
+| SQLite store | `src/jerald/store/store.py` | 6 | Persists exactly what the Orchestrator produces (design in `docs/design/store.md`) — deliberately 2 tables, not the spec's 5 (`runs`/`trials`/`steps`/`scores`/`verdicts`): `runs` (one row per run, `Verdict` fields flattened in and nullable since not every `kind` of run produces one) and `trials` (one row per `TrialRecord`, with `trajectory_json`/`scores_json` JSON columns standing in for the spec's separate `steps`/`scores` tables). `suites`/`tasks`/`configs`/`noise_profiles`/`canary_points` are out of scope entirely. `save_run(trials=..., verdict=...)` takes the raw pieces rather than a `ComparisonResult`, since `jerald run`'s single-arm result has no `ComparisonResult` to pass. `PRAGMA journal_mode=WAL` per the spec's storage line, verified via a `journal_mode()` method rather than poking `_connection` from a test. |
+| `Orchestrator.run_single` | `src/jerald/orchestrator/core.py` | 4 | `jerald run`'s method: one Configuration, no comparison, so no `Verdict` and no seed-pairing. Shares retry/concurrency/scoring with `run_comparison` via a new private `_run_jobs(jobs)` both call. Returns `SingleRunResult(scores, trials)` — `ComparisonResult`'s single-arm counterpart. |
+| `jerald compare --store` | `src/jerald/cli.py` | 2 | Wired `compare` to the store: `--store PATH` persists the run and prints `run_id: <uuid>`; omitted, nothing is written — opt-in, since a default path under the CWD would mean `compare` silently writes a file next to wherever it's invoked. Closes the loop the spec names directly: "every verdict can be traced to its trials." |
+| `jerald run` | `src/jerald/cli.py` | 7 | Second real, end-to-end command. `--arm {baseline,candidate}` (default `baseline`) selects which `configs:` entry to run — not a spec-named flag (there's no `jerald baseline`/`init` yet to otherwise supply a default Configuration), added because *something* has to pick one. `--trials N` overrides the suite's `defaults.trials` (spec-named, `run`-specific). Unlike `compare`, `--store` is **required**, not opt-in: per the spec, storing trials is the entire point of `run`; a run that persists nothing would do nothing useful. `--dry-run` still works without `--store` (nothing to persist when nothing runs). No `Verdict` to print or map to an exit code — prints each task's pass count instead, always exits 0 on success (agent failures are data, not a CLI failure, same principle as "never retried because they are the data"). Manually smoke-tested against the real installed `jerald` console command, not just `CliRunner`. |
 
-| `jerald compare --store` | `src/jerald/cli.py` | 2 | Wired `compare` to the store: `--store PATH` persists the run (`Store.save_run`) and prints `run_id: <uuid>`; omitted, nothing is written — opt-in on purpose, since a default path under the CWD would mean `jerald compare` silently writes a file next to wherever it's invoked. Closes the loop the spec names directly: "every verdict can be traced to its trials." |
-
-**82 tests total (1 skipped on win32), all passing.** `ruff check .` clean.
+**94 tests total (1 skipped on win32), all passing.** `ruff check .` clean.
 
 ## Open decisions (never formally confirmed — currently running on my recommendations)
 
@@ -87,29 +88,31 @@ release, a README, a announcement) happens.
 
 In rough dependency order:
 
-1. **`jerald run`** — needs its own single-arm path: it runs *one* configuration, not a
-   baseline/candidate pair, which `Orchestrator.run_comparison` doesn't support (hard-coded to
-   exactly two arms per the fixed-n MVP scope). Either add a single-arm method to the
-   Orchestrator or have `run` call `run_comparison` with the same Arm as both baseline and
-   candidate and only store one side — the latter is a hack, so this wants a few minutes of
-   real design, not just wiring. The store side is ready (`Store.save_run(result=...)`).
-2. **Per-provider concurrency caps** — the Orchestrator currently takes one global
+1. **`jerald baseline save/list/show`** — now unblocked: `jerald run --store` persists a Run,
+   so `baseline save <name>` can run the baseline Arm and tag the resulting run with a name
+   (needs a small schema addition — a `baselines` table or a `name` column on `runs` — to
+   remember which run a name points to). This is the real next step toward `jerald check`,
+   which the spec calls "the command most people run."
+2. **`jerald check`** — needs `baseline` (item 1): "compare the working tree with a named
+   baseline." Likely `load_config` + `load_suite` + look up the named baseline's stored Run +
+   run the candidate Arm fresh + feed both into `compare()` directly (not
+   `Orchestrator.run_comparison`, since one side is already-stored scores, not a live Arm).
+3. **Per-provider concurrency caps** — the Orchestrator currently takes one global
    `max_concurrency`; splitting it per-provider needs the config loader to carry which
    provider each Arm's Adapter talks to, which it doesn't today (one Adapter, shared by both
    Arms — there's only ever one provider per comparison in this slice).
-3. **`McpAdapter`** — the fourth production adapter named in the spec and in
+4. **`McpAdapter`** — the fourth production adapter named in the spec and in
    `docs/design/adapter-contract.md`'s registry note; not started, no design work done on it
    yet (what MCP client library, what transport, how `JERALD_TOOL_BASE_URL` fault injection
    applies to MCP tool calls specifically). Both loaders already raise a clear "not implemented
    yet" error for `type: mcp`, so adding it is additive once designed.
-4. **Trajectory/efficiency/state/judge Scorer families** — the suite loader already raises a
+5. **Trajectory/efficiency/state/judge Scorer families** — the suite loader already raises a
    clear "not implemented yet" error for these `type:` values, so adding one is additive: a new
    entry in the loader's scorer factory registry plus the Scorer implementation itself.
-5. **The rest of the CLI surface** — `jerald init`, `doctor`, `baseline`, `calibrate`, `plan`,
-   `check`, `attribute`, `bisect`, `canary`, `stress`, `report`, `capture`, `replay`, `purge`,
-   plus `compare`'s own deferred flags (`--max-trials`/`--fixed-n`, needing the sequential
-   engine; `--budget-usd`, needing cost tracking) — all intentionally deferred past the narrow
-   MVP slice, all unblocked by different future items on this list, not by each other.
+6. **The rest of the CLI surface** — `jerald init`, `doctor`, `calibrate`, `plan`, `attribute`,
+   `bisect`, `canary`, `stress`, `report`, `capture`, `replay`, `purge`, plus `compare`'s own
+   deferred flags (`--max-trials`/`--fixed-n`, needing the sequential engine; `--budget-usd`,
+   needing cost tracking) — all intentionally deferred past the narrow MVP slice.
 
 Not started at all: trajectory/efficiency/judge Scorer families, the sequential
 rounds/alpha-spending engine, fault injection, canaries, attribution, bisect, the sandbox/proxy

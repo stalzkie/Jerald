@@ -9,7 +9,7 @@ import click
 from jerald import __version__
 from jerald.adapters.base import AdapterInfrastructureError
 from jerald.config.loader import ConfigLoadError, load_config
-from jerald.orchestrator.core import Orchestrator
+from jerald.orchestrator.core import Arm, Orchestrator
 from jerald.store.store import Store
 from jerald.suite.loader import SuiteLoadError, load_suite
 
@@ -162,6 +162,126 @@ def compare(
         click.echo(f"run_id: {run_id}")
 
     ctx.exit(_EXIT_CODE_BY_VERDICT_LABEL[verdict.label])
+
+
+@main.command()
+@click.option(
+    "--config", "config_path", default="jerald.yaml", show_default=True,
+    type=click.Path(path_type=Path), help="Path to jerald.yaml.",
+)
+@click.option(
+    "--suite", "suite_path", default=None,
+    type=click.Path(path_type=Path), help="Path to the suite YAML file.",
+)
+@click.option(
+    "--arm", "arm_name", default="baseline", show_default=True,
+    type=click.Choice(["baseline", "candidate"]), help="Which jerald.yaml config to run.",
+)
+@click.option("--trials", "trials", default=None, type=int, help="Override the suite's defaults.trials.")
+@click.option("--seed", default=0, type=int, show_default=True, help="Top-level run seed.")
+@click.option(
+    "--parallel", default=4, type=int, show_default=True, help="Maximum concurrent trials.",
+)
+@click.option("--dry-run", is_flag=True, help="Print the plan without running any trials.")
+@click.option(
+    "--out", "out_path", default=None,
+    type=click.Path(path_type=Path), help="Write the per-task pass counts as JSON to this path.",
+)
+@click.option(
+    "--store", "store_path", default=None,
+    type=click.Path(path_type=Path), help="Persist the run to this SQLite store.",
+)
+@click.pass_context
+def run(
+    ctx: click.Context,
+    config_path: Path,
+    suite_path: Path | None,
+    arm_name: str,
+    trials: int | None,
+    seed: int,
+    parallel: int,
+    dry_run: bool,
+    out_path: Path | None,
+    store_path: Path | None,
+) -> None:
+    """Run one configuration and store its trials.
+
+    --arm selects which entry of jerald.yaml's `configs:` to run
+    (default: baseline). The spec's CLI reference doesn't name this flag --
+    there's no jerald baseline/init yet to otherwise supply a default
+    Configuration to run, so a selector is the only way to pick one.
+
+    --store is required (not optional, unlike jerald compare's): the
+    entire point of jerald run, per the spec, is storing its trials --
+    a run that stores nothing would do nothing useful.
+    """
+    if suite_path is None:
+        click.echo("Error: --suite is required.", err=True)
+        ctx.exit(EXIT_USAGE_ERROR)
+
+    try:
+        project_config = load_config(config_path)
+    except ConfigLoadError as e:
+        click.echo(f"Error: {e}", err=True)
+        ctx.exit(EXIT_USAGE_ERROR)
+
+    try:
+        suite = load_suite(suite_path)
+    except SuiteLoadError as e:
+        click.echo(f"Error: {e}", err=True)
+        ctx.exit(EXIT_USAGE_ERROR)
+
+    arm: Arm = project_config.baseline if arm_name == "baseline" else project_config.candidate
+    trials_per_task = trials if trials is not None else suite.trials_per_task
+
+    if dry_run:
+        click.echo(f"suite: {suite.name} (v{suite.version})")
+        click.echo(f"tasks: {len(suite.tasks)}")
+        click.echo(f"arm: {arm_name}")
+        click.echo(f"trials per task: {trials_per_task}")
+        click.echo(f"overrides: {dict(arm.overrides)}")
+        ctx.exit(EXIT_NO_REGRESSION)
+
+    if store_path is None:
+        click.echo("Error: --store is required.", err=True)
+        ctx.exit(EXIT_USAGE_ERROR)
+
+    orchestrator = Orchestrator(max_concurrency=parallel)
+    started_at = datetime.now(UTC)
+    try:
+        result = orchestrator.run_single(suite.tasks, arm, trials_per_task=trials_per_task, seed=seed)
+    except AdapterInfrastructureError as e:
+        click.echo(f"Infrastructure failure: {e}", err=True)
+        ctx.exit(EXIT_INFRASTRUCTURE_FAILURE)
+    ended_at = datetime.now(UTC)
+
+    for task_id, scores in result.scores.items():
+        click.echo(f"{task_id}: {sum(scores)}/{len(scores)} passed")
+
+    if out_path is not None:
+        out_path.write_text(json.dumps(
+            {task_id: {"passed": sum(scores), "total": len(scores)}
+             for task_id, scores in result.scores.items()},
+            indent=2,
+        ))
+
+    store = Store(store_path)
+    run_id = store.save_run(
+        kind="run",
+        project=project_config.project,
+        suite_name=suite.name,
+        suite_version=suite.version,
+        seed=seed,
+        alpha=project_config.alpha,
+        started_at=started_at,
+        ended_at=ended_at,
+        trials=result.trials,
+        verdict=None,
+    )
+    store.close()
+    click.echo(f"run_id: {run_id}")
+
+    ctx.exit(EXIT_NO_REGRESSION)
 
 
 if __name__ == "__main__":

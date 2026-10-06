@@ -182,3 +182,115 @@ def test_compare_margin_pp_override_takes_precedence_over_config(tmp_path: Path)
     assert "margin=200.0pp" in result.output
     assert "NO_REGRESSION" in result.output  # -100pp effect is within a 200pp margin
     assert result.exit_code == 0
+
+
+def test_run_persists_the_baseline_arm_by_default(tmp_path: Path) -> None:
+    suite_path, config_path = _write_suite_and_config(tmp_path, candidate_model="candidate-model")
+    store_path = tmp_path / "jerald.db"
+
+    result = CliRunner().invoke(
+        main,
+        ["run", "--config", str(config_path), "--suite", str(suite_path),
+         "--seed", "0", "--store", str(store_path)],
+    )
+
+    assert result.exit_code == 0
+    run_id = next(
+        line.split("run_id:")[1].strip() for line in result.output.splitlines() if "run_id:" in line
+    )
+
+    store = Store(store_path)
+    stored = store.get_run(run_id)
+    assert stored is not None
+    assert stored.kind == "run"
+    assert stored.verdict is None
+    assert len(stored.trials) == 2 * 5  # 2 tasks x 5 trials (suite default)
+    assert all(r.passed for r in stored.trials)  # baseline-model always matches "ok"
+    store.close()
+
+
+def test_run_with_arm_candidate_runs_the_candidate_configuration(tmp_path: Path) -> None:
+    suite_path, config_path = _write_suite_and_config(tmp_path, candidate_model="candidate-model")
+    store_path = tmp_path / "jerald.db"
+
+    result = CliRunner().invoke(
+        main,
+        ["run", "--config", str(config_path), "--suite", str(suite_path), "--arm", "candidate",
+         "--seed", "0", "--store", str(store_path)],
+    )
+
+    assert result.exit_code == 0
+    run_id = next(
+        line.split("run_id:")[1].strip() for line in result.output.splitlines() if "run_id:" in line
+    )
+    store = Store(store_path)
+    stored = store.get_run(run_id)
+    assert stored is not None
+    assert all(not r.passed for r in stored.trials)  # candidate-model never matches "ok"
+    store.close()
+
+
+def test_run_trials_option_overrides_the_suite_default(tmp_path: Path) -> None:
+    suite_path, config_path = _write_suite_and_config(tmp_path, candidate_model="candidate-model")
+    store_path = tmp_path / "jerald.db"
+
+    result = CliRunner().invoke(
+        main,
+        ["run", "--config", str(config_path), "--suite", str(suite_path), "--trials", "2",
+         "--seed", "0", "--store", str(store_path)],
+    )
+
+    run_id = next(
+        line.split("run_id:")[1].strip() for line in result.output.splitlines() if "run_id:" in line
+    )
+    store = Store(store_path)
+    stored = store.get_run(run_id)
+    assert stored is not None
+    assert len(stored.trials) == 2 * 2  # 2 tasks x 2 trials (overridden)
+    store.close()
+
+
+def test_run_requires_suite_flag(tmp_path: Path) -> None:
+    _, config_path = _write_suite_and_config(tmp_path, candidate_model="candidate-model")
+
+    result = CliRunner().invoke(main, ["run", "--config", str(config_path)])
+
+    assert result.exit_code == 3
+    assert "--suite" in result.output
+
+
+def test_run_requires_store_flag(tmp_path: Path) -> None:
+    suite_path, config_path = _write_suite_and_config(tmp_path, candidate_model="candidate-model")
+
+    result = CliRunner().invoke(
+        main, ["run", "--config", str(config_path), "--suite", str(suite_path)]
+    )
+
+    assert result.exit_code == 3
+    assert "--store" in result.output
+
+
+def test_run_dry_run_prints_plan_without_requiring_store(tmp_path: Path) -> None:
+    suite_path, config_path = _write_suite_and_config(tmp_path, candidate_model="candidate-model")
+
+    result = CliRunner().invoke(
+        main,
+        ["run", "--config", str(config_path), "--suite", str(suite_path), "--dry-run"],
+    )
+
+    assert result.exit_code == 0
+    assert "demo-suite" in result.output
+    assert "arm: baseline" in result.output
+    assert "run_id:" not in result.output
+
+
+def test_run_exits_3_on_missing_config_file(tmp_path: Path) -> None:
+    suite_path, _ = _write_suite_and_config(tmp_path, candidate_model="candidate-model")
+
+    result = CliRunner().invoke(
+        main,
+        ["run", "--config", str(tmp_path / "missing.yaml"), "--suite", str(suite_path),
+         "--store", str(tmp_path / "jerald.db")],
+    )
+
+    assert result.exit_code == 3
