@@ -1,9 +1,8 @@
 # Jerald — progress log
 
 Status snapshot for picking this back up. Last updated 2026-10-06, after 29 commits on `main`,
-pushed to [github.com/stalzkie/Jerald](https://github.com/stalzkie/Jerald). CI has been green
-on Python 3.11/3.12/3.13 through every push so far; the batch of commits in this session hasn't
-had a CI run confirmed yet since it was just pushed — worth checking before trusting it blindly.
+pushed to [github.com/stalzkie/Jerald](https://github.com/stalzkie/Jerald), CI green on
+Python 3.11/3.12/3.13 (confirmed via `gh run watch` on the push itself).
 
 ## How we got here
 
