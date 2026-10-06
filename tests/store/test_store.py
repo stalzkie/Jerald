@@ -143,3 +143,61 @@ def test_store_enables_wal_journal_mode(tmp_path: Path) -> None:
     store = Store(tmp_path / "jerald.db")
     assert store.journal_mode() == "wal"
     store.close()
+
+
+def _save_sample_run(store: Store, *, project: str = "demo", suite_name: str = "demo-suite") -> str:
+    return store.save_run(
+        kind="baseline", project=project, suite_name=suite_name, suite_version=1, seed=0,
+        alpha=0.05, started_at=datetime(2026, 10, 6, tzinfo=UTC),
+        ended_at=datetime(2026, 10, 6, tzinfo=UTC),
+        trials=[_trial_record()], verdict=None,
+    )
+
+
+def test_save_baseline_and_get_baseline_round_trips_the_named_run(tmp_path: Path) -> None:
+    store = Store(tmp_path / "jerald.db")
+    run_id = _save_sample_run(store)
+
+    store.save_baseline(name="main", run_id=run_id, saved_at=datetime(2026, 10, 6, tzinfo=UTC))
+
+    stored = store.get_baseline("main")
+    assert stored is not None
+    assert stored.run_id == run_id
+    assert stored.kind == "baseline"
+    store.close()
+
+
+def test_get_baseline_returns_none_for_unknown_name(tmp_path: Path) -> None:
+    store = Store(tmp_path / "jerald.db")
+    assert store.get_baseline("does-not-exist") is None
+    store.close()
+
+
+def test_save_baseline_with_the_same_name_replaces_the_previous_run(tmp_path: Path) -> None:
+    store = Store(tmp_path / "jerald.db")
+    first_run_id = _save_sample_run(store)
+    second_run_id = _save_sample_run(store)
+
+    store.save_baseline(name="main", run_id=first_run_id, saved_at=datetime(2026, 10, 1, tzinfo=UTC))
+    store.save_baseline(name="main", run_id=second_run_id, saved_at=datetime(2026, 10, 2, tzinfo=UTC))
+
+    stored = store.get_baseline("main")
+    assert stored is not None
+    assert stored.run_id == second_run_id
+    assert len(store.list_baselines()) == 1
+    store.close()
+
+
+def test_list_baselines_returns_summaries_most_recently_saved_first(tmp_path: Path) -> None:
+    store = Store(tmp_path / "jerald.db")
+    run_a = _save_sample_run(store, suite_name="suite-a")
+    run_b = _save_sample_run(store, suite_name="suite-b")
+    store.save_baseline(name="old", run_id=run_a, saved_at=datetime(2026, 10, 1, tzinfo=UTC))
+    store.save_baseline(name="new", run_id=run_b, saved_at=datetime(2026, 10, 2, tzinfo=UTC))
+
+    summaries = store.list_baselines()
+
+    assert [s.name for s in summaries] == ["new", "old"]
+    assert summaries[0].run_id == run_b
+    assert summaries[0].suite_name == "suite-b"
+    store.close()

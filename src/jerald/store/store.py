@@ -48,6 +48,12 @@ CREATE TABLE IF NOT EXISTS trials (
     trajectory_json TEXT NOT NULL,
     scores_json TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS baselines (
+    name TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES runs(run_id),
+    saved_at TEXT NOT NULL
+);
 """
 
 
@@ -75,6 +81,15 @@ class RunSummary:
     started_at: datetime
     verdict_label: str | None
     verdict_effect_pp: float | None
+
+
+@dataclass(frozen=True)
+class BaselineSummary:
+    name: str
+    run_id: str
+    saved_at: datetime
+    project: str
+    suite_name: str
 
 
 class Store:
@@ -199,6 +214,37 @@ class Store:
                 run_id=row[0], kind=row[1], project=row[2], suite_name=row[3],
                 started_at=datetime.fromisoformat(row[4]), verdict_label=row[5],
                 verdict_effect_pp=row[6],
+            )
+            for row in rows
+        ]
+
+    def save_baseline(self, *, name: str, run_id: str, saved_at: datetime) -> None:
+        self._connection.execute(
+            "INSERT OR REPLACE INTO baselines (name, run_id, saved_at) VALUES (?, ?, ?)",
+            (name, run_id, saved_at.isoformat()),
+        )
+        self._connection.commit()
+
+    def get_baseline(self, name: str) -> StoredRun | None:
+        row = self._connection.execute(
+            "SELECT run_id FROM baselines WHERE name = ?", (name,)
+        ).fetchone()
+        if row is None:
+            return None
+        return self.get_run(row[0])
+
+    def list_baselines(self) -> Sequence[BaselineSummary]:
+        rows = self._connection.execute(
+            """
+            SELECT b.name, b.run_id, b.saved_at, r.project, r.suite_name
+            FROM baselines b JOIN runs r ON r.run_id = b.run_id
+            ORDER BY b.saved_at DESC
+            """
+        ).fetchall()
+        return [
+            BaselineSummary(
+                name=row[0], run_id=row[1], saved_at=datetime.fromisoformat(row[2]),
+                project=row[3], suite_name=row[4],
             )
             for row in rows
         ]

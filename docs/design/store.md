@@ -28,6 +28,15 @@ Two tables instead of the spec's `runs`/`trials`/`steps`/`scores`/`verdicts` fiv
   normalizing them into their own tables only pays off once something needs to query *across*
   trials by step name or scorer id, which nothing does yet. `PRAGMA journal_mode=WAL` on connect,
   per the spec's storage line.
+- **`baselines`**: a thin `name -> run_id` pointer (plus `saved_at`), keyed by `name` alone —
+  not the spec's own concept of a table, but the simplest thing that makes `jerald baseline`'s
+  three verbs (`save`/`list`/`show`) work: "save" is `INSERT OR REPLACE` (re-saving a name moves
+  what it points to, which is exactly what re-running `jerald baseline save main` should do —
+  "main" means *the current* main, not a history of mains), "show" is `get_baseline(name)` →
+  `get_run(that run_id)`, "list" joins back to `runs` for display fields. Scoped globally within
+  one store file, not per-project — one store file per project is the only setup this CLI
+  produces, so cross-project name collisions are a real but accepted limitation, not a case
+  silently mishandled.
 
 ## Interface
 
@@ -69,6 +78,11 @@ class Store:
 
     def get_run(self, run_id: str) -> StoredRun | None: ...
     def list_runs(self) -> Sequence[RunSummary]: ...
+
+    def save_baseline(self, *, name: str, run_id: str, saved_at: datetime) -> None: ...
+    def get_baseline(self, name: str) -> StoredRun | None: ...
+    def list_baselines(self) -> Sequence[BaselineSummary]: ...
+
     def close(self) -> None: ...
 ```
 
