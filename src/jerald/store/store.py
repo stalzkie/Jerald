@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from jerald.adapters.base import Step, TrialResult, Usage
 from jerald.analysis.compare import Verdict
-from jerald.orchestrator.core import ComparisonResult, TrialRecord
+from jerald.orchestrator.core import TrialRecord
 from jerald.scorers.base import ScoreResult
 
 _SCHEMA = """
@@ -21,14 +21,14 @@ CREATE TABLE IF NOT EXISTS runs (
     suite_name TEXT NOT NULL,
     suite_version INTEGER NOT NULL,
     seed INTEGER NOT NULL,
-    margin_pp REAL NOT NULL,
+    margin_pp REAL,
     alpha REAL NOT NULL,
     started_at TEXT NOT NULL,
     ended_at TEXT NOT NULL,
-    verdict_label TEXT NOT NULL,
-    verdict_effect_pp REAL NOT NULL,
-    verdict_ci_low_pp REAL NOT NULL,
-    verdict_ci_high_pp REAL NOT NULL
+    verdict_label TEXT,
+    verdict_effect_pp REAL,
+    verdict_ci_low_pp REAL,
+    verdict_ci_high_pp REAL
 );
 
 CREATE TABLE IF NOT EXISTS trials (
@@ -59,11 +59,10 @@ class StoredRun:
     suite_name: str
     suite_version: int
     seed: int
-    margin_pp: float
     alpha: float
     started_at: datetime
     ended_at: datetime
-    verdict: Verdict
+    verdict: Verdict | None
     trials: Sequence[TrialRecord]
 
 
@@ -74,8 +73,8 @@ class RunSummary:
     project: str
     suite_name: str
     started_at: datetime
-    verdict_label: str
-    verdict_effect_pp: float
+    verdict_label: str | None
+    verdict_effect_pp: float | None
 
 
 class Store:
@@ -99,10 +98,10 @@ class Store:
         alpha: float,
         started_at: datetime,
         ended_at: datetime,
-        result: ComparisonResult,
+        trials: Sequence[TrialRecord],
+        verdict: Verdict | None = None,
     ) -> str:
         run_id = str(uuid4())
-        verdict = result.verdict
         self._connection.execute(
             """
             INSERT INTO runs (
@@ -113,9 +112,12 @@ class Store:
             """,
             (
                 run_id, kind, project, suite_name, suite_version, seed,
-                verdict.margin_pp, alpha,
+                verdict.margin_pp if verdict else None, alpha,
                 started_at.isoformat(), ended_at.isoformat(),
-                verdict.label, verdict.effect_pp, verdict.ci_low_pp, verdict.ci_high_pp,
+                verdict.label if verdict else None,
+                verdict.effect_pp if verdict else None,
+                verdict.ci_low_pp if verdict else None,
+                verdict.ci_high_pp if verdict else None,
             ),
         )
         self._connection.executemany(
@@ -135,7 +137,7 @@ class Store:
                     json.dumps([asdict(step) for step in r.trial.trajectory]),
                     json.dumps([asdict(score) for score in r.scores]),
                 )
-                for r in result.trials
+                for r in trials
             ],
         )
         self._connection.commit()
@@ -162,6 +164,17 @@ class Store:
             for trial_row in trial_rows
         ]
 
+        verdict = (
+            Verdict(
+                label=run["verdict_label"],
+                effect_pp=run["verdict_effect_pp"],
+                ci_low_pp=run["verdict_ci_low_pp"],
+                ci_high_pp=run["verdict_ci_high_pp"],
+                margin_pp=run["margin_pp"],
+            )
+            if run["verdict_label"] is not None
+            else None
+        )
         return StoredRun(
             run_id=run["run_id"],
             kind=run["kind"],
@@ -169,17 +182,10 @@ class Store:
             suite_name=run["suite_name"],
             suite_version=run["suite_version"],
             seed=run["seed"],
-            margin_pp=run["margin_pp"],
             alpha=run["alpha"],
             started_at=datetime.fromisoformat(run["started_at"]),
             ended_at=datetime.fromisoformat(run["ended_at"]),
-            verdict=Verdict(
-                label=run["verdict_label"],
-                effect_pp=run["verdict_effect_pp"],
-                ci_low_pp=run["verdict_ci_low_pp"],
-                ci_high_pp=run["verdict_ci_high_pp"],
-                margin_pp=run["margin_pp"],
-            ),
+            verdict=verdict,
             trials=trials,
         )
 

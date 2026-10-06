@@ -155,7 +155,8 @@ def compare(
             alpha=resolved_alpha,
             started_at=started_at,
             ended_at=ended_at,
-            result=result,
+            trials=result.trials,
+            verdict=verdict,
         )
         store.close()
         click.echo(f"run_id: {run_id}")

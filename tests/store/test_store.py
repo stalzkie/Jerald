@@ -3,33 +3,30 @@ from pathlib import Path
 
 from jerald.adapters.base import Step, TrialResult, Usage
 from jerald.analysis.compare import Verdict
-from jerald.orchestrator.core import ComparisonResult, TrialRecord
+from jerald.orchestrator.core import TrialRecord
 from jerald.scorers.base import ScoreResult
 from jerald.store.store import Store
 
 
-def _comparison_result() -> ComparisonResult:
+def _trial_record(arm_name: str = "baseline") -> TrialRecord:
     step = Step(type="tool_call", name="lookup", args={"id": 1}, result={"ok": True},
                 error=None, t_start=0.0, t_end=0.1)
     trial = TrialResult(
-        trial_id="task_0:baseline:0", task_id="task_0", outcome="completed",
+        trial_id=f"task_0:{arm_name}:0", task_id="task_0", outcome="completed",
         final_message="ok", trajectory=[step],
         usage=Usage(input_tokens=10, output_tokens=5, cost_usd=0.01),
         model_reported="example-model",
     )
     score = ScoreResult(scorer_id="exact", passed=True, value=1.0, evidence="matched")
-    record = TrialRecord(
-        task_id="task_0", arm_name="baseline", trial_index=0, seed=42,
+    return TrialRecord(
+        task_id="task_0", arm_name=arm_name, trial_index=0, seed=42,
         trial=trial, scores=[score], passed=True,
     )
-    verdict = Verdict(label="NO_REGRESSION", effect_pp=0.0, ci_low_pp=-1.0, ci_high_pp=1.0,
-                       margin_pp=3.0)
-    return ComparisonResult(
-        verdict=verdict,
-        baseline_scores={"task_0": [True]},
-        candidate_scores={"task_0": [True]},
-        trials=[record],
-    )
+
+
+def _verdict() -> Verdict:
+    return Verdict(label="NO_REGRESSION", effect_pp=0.0, ci_low_pp=-1.0, ci_high_pp=1.0,
+                    margin_pp=3.0)
 
 
 def test_save_and_get_run_round_trips_verdict_and_trial_records(tmp_path: Path) -> None:
@@ -39,7 +36,8 @@ def test_save_and_get_run_round_trips_verdict_and_trial_records(tmp_path: Path) 
 
     run_id = store.save_run(
         kind="compare", project="demo", suite_name="demo-suite", suite_version=1, seed=0,
-        alpha=0.05, started_at=started, ended_at=ended, result=_comparison_result(),
+        alpha=0.05, started_at=started, ended_at=ended,
+        trials=[_trial_record()], verdict=_verdict(),
     )
 
     stored = store.get_run(run_id)
@@ -53,9 +51,7 @@ def test_save_and_get_run_round_trips_verdict_and_trial_records(tmp_path: Path) 
     assert stored.alpha == 0.05
     assert stored.started_at == started
     assert stored.ended_at == ended
-    assert stored.verdict == Verdict(
-        label="NO_REGRESSION", effect_pp=0.0, ci_low_pp=-1.0, ci_high_pp=1.0, margin_pp=3.0
-    )
+    assert stored.verdict == _verdict()
 
     assert len(stored.trials) == 1
     record = stored.trials[0]
@@ -78,6 +74,24 @@ def test_save_and_get_run_round_trips_verdict_and_trial_records(tmp_path: Path) 
     store.close()
 
 
+def test_save_run_with_no_verdict_round_trips_as_none(tmp_path: Path) -> None:
+    store = Store(tmp_path / "jerald.db")
+    started = datetime(2026, 10, 6, tzinfo=UTC)
+
+    run_id = store.save_run(
+        kind="run", project="demo", suite_name="demo-suite", suite_version=1, seed=0,
+        alpha=0.05, started_at=started, ended_at=started,
+        trials=[_trial_record()], verdict=None,
+    )
+
+    stored = store.get_run(run_id)
+    assert stored is not None
+    assert stored.kind == "run"
+    assert stored.verdict is None
+    assert len(stored.trials) == 1
+    store.close()
+
+
 def test_get_run_returns_none_for_unknown_run_id(tmp_path: Path) -> None:
     store = Store(tmp_path / "jerald.db")
     assert store.get_run("does-not-exist") is None
@@ -90,13 +104,13 @@ def test_list_runs_returns_summaries_most_recent_first(tmp_path: Path) -> None:
         kind="compare", project="demo", suite_name="suite-a", suite_version=1, seed=0,
         alpha=0.05, started_at=datetime(2026, 10, 1, tzinfo=UTC),
         ended_at=datetime(2026, 10, 1, 0, 1, tzinfo=UTC),
-        result=_comparison_result(),
+        trials=[_trial_record()], verdict=_verdict(),
     )
     second = store.save_run(
         kind="compare", project="demo", suite_name="suite-b", suite_version=2, seed=1,
         alpha=0.05, started_at=datetime(2026, 10, 2, tzinfo=UTC),
         ended_at=datetime(2026, 10, 2, 0, 1, tzinfo=UTC),
-        result=_comparison_result(),
+        trials=[_trial_record()], verdict=_verdict(),
     )
 
     summaries = store.list_runs()
@@ -114,7 +128,7 @@ def test_store_persists_across_reopening_the_same_file(tmp_path: Path) -> None:
         kind="compare", project="demo", suite_name="demo-suite", suite_version=1, seed=0,
         alpha=0.05, started_at=datetime(2026, 10, 6, tzinfo=UTC),
         ended_at=datetime(2026, 10, 6, tzinfo=UTC),
-        result=_comparison_result(),
+        trials=[_trial_record()], verdict=_verdict(),
     )
     store.close()
 

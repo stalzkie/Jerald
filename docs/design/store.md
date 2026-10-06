@@ -40,11 +40,10 @@ class StoredRun:
     suite_name: str
     suite_version: int
     seed: int
-    margin_pp: float
     alpha: float
     started_at: datetime
     ended_at: datetime
-    verdict: Verdict
+    verdict: Verdict | None
     trials: Sequence[TrialRecord]  # reuses the Orchestrator's own type
 
 
@@ -55,8 +54,8 @@ class RunSummary:
     project: str
     suite_name: str
     started_at: datetime
-    verdict_label: str
-    verdict_effect_pp: float
+    verdict_label: str | None
+    verdict_effect_pp: float | None
 
 
 class Store:
@@ -64,7 +63,8 @@ class Store:
 
     def save_run(
         self, *, kind: str, project: str, suite_name: str, suite_version: int, seed: int,
-        alpha: float, started_at: datetime, ended_at: datetime, result: ComparisonResult,
+        alpha: float, started_at: datetime, ended_at: datetime,
+        trials: Sequence[TrialRecord], verdict: Verdict | None = None,
     ) -> str: ...  # returns a new run_id
 
     def get_run(self, run_id: str) -> StoredRun | None: ...
@@ -72,9 +72,14 @@ class Store:
     def close(self) -> None: ...
 ```
 
-`save_run` takes the Orchestrator's `ComparisonResult` directly rather than asking the caller to
-flatten it first — the CLI's job is "run the comparison, then save it," not "run the comparison,
-reshape the result, then save it."
+`verdict` is optional because not every `kind` of Run produces one — `jerald run` (one
+Configuration, no comparison) has nothing to put there, matching the spec's own schema where
+`verdicts` is a separate table from `runs` rather than a column on it. `save_run` takes the raw
+`trials`/`verdict` pieces rather than the whole `ComparisonResult`, since a single-arm run has no
+`ComparisonResult` to pass — `compare`'s CLI call site passes `result.trials`/`result.verdict`;
+`run`'s passes its own trial list and `verdict=None`. The `runs.margin_pp`/`verdict_*` columns are
+nullable for the same reason, and `get_run` returns `verdict=None` when they're `NULL` rather than
+constructing a nonsense `Verdict`.
 
 ## Trade-offs
 
