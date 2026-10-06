@@ -1,6 +1,6 @@
 # Jerald — progress log
 
-Status snapshot for picking this back up. Last updated 2026-10-06, after 9 commits on `main`
+Status snapshot for picking this back up. Last updated 2026-10-06, after 10 commits on `main`
 (pushed to [github.com/stalzkie/Jerald](https://github.com/stalzkie/Jerald), CI green on
 Python 3.11/3.12/3.13 throughout).
 
@@ -49,7 +49,9 @@ confirmed or overridden.
 | CliAdapter | `src/jerald/adapters/cli_adapter.py` | 6 (+1 skipped on Windows) | JSON on stdin/stdout of a subprocess, per `docs/design/adapter-contract.md`. Non-zero exit → `AdapterInfrastructureError(retryable=True)` (process crash, might be transient); malformed JSON on stdout with exit 0 → `AdapterInfrastructureError(retryable=False)` (wire-schema bug, retrying won't help); exit 0 with an in-band `"error"` field → `agent_error` outcome, never an exception. Timeout escalates `terminate()` (SIGTERM on POSIX) → wait `kill_grace_s` → `kill()` (SIGKILL) if still alive. The SIGTERM-ignored escalation test is `skipif(win32)`: Windows has no catchable SIGTERM — `Popen.terminate()` is an unconditional `TerminateProcess` there, so the escalation path can only be observed on the Linux CI matrix, not on a Windows dev machine. |
 | HttpAdapter | `src/jerald/adapters/http_adapter.py` | 10 | POSTs the spec's exact wire shape (`task_id`, `trial_id`, `messages`, `env.seed`, `overrides`) and parses `final_message`/`trajectory`/`model_reported`/in-band `error`. Added `httpx>=0.27` as a real dependency (decided over `requests`: native per-request timeout, no separate `responses`-style mocking library needed — tests use `httpx.MockTransport` injected via a `client` constructor param, no real server). 5xx and 429 → `AdapterInfrastructureError(retryable=True)` (429 called out because the spec's own fault-injection table (§Tool, transient error) names 429/503 as the transient pair); other 4xx → `retryable=False`; connection failure → `retryable=True`; malformed JSON body → `retryable=False`; `httpx.TimeoutException` → `outcome="timeout"` (data, not an exception, matching the Adapter contract's timeout rule). |
 
-**35 tests total (1 skipped on win32), all passing.** `ruff check .` clean.
+| FakeAdapter | `src/jerald/adapters/fake_adapter.py` | 5 | The test double named in `docs/design/adapter-contract.md`: a dict keyed by `(task_id, trial_id)` or a callable, either returning the scripted `TrialResult`. `fail_calls` scripts which 0-indexed call numbers raise an `AdapterInfrastructureError` (a default one, or one passed in via `error=`) instead, so the Orchestrator's retry loop can be tested deterministically — no network, no subprocess, no sleeping. |
+
+**40 tests total (1 skipped on win32), all passing.** `ruff check .` clean.
 
 ## Open decisions (never formally confirmed — currently running on my recommendations)
 
@@ -71,21 +73,18 @@ release, a README, a announcement) happens.
 
 In rough dependency order:
 
-1. **`FakeAdapter`** — the test double named in `docs/design/adapter-contract.md`, needed once
-   the Orchestrator (next item) has tests of its own. Should be able to script a scripted
-   `AdapterInfrastructureError` on the Nth call to exercise retry logic deterministically.
-2. **Orchestrator** — wires `Adapter.run_trial` → `Scorer.score` → `compare()` into the actual
+1. **Orchestrator** — wires `Adapter.run_trial` → `Scorer.score` → `compare()` into the actual
    `jerald run` / `jerald compare` command loop. This is where retry-on-infra-error,
    interleaving, and per-provider concurrency caps (all named in the spec's Execution model)
-   get built — none of that exists yet.
-3. **CLI commands** — `jerald run`, `jerald compare` wired to real logic (currently only
+   get built — none of that exists yet. `FakeAdapter` is ready for its tests.
+2. **CLI commands** — `jerald run`, `jerald compare` wired to real logic (currently only
    `--version`/`--help` exist). `jerald init`, `doctor`, `baseline`, `calibrate`, `plan`,
    `check`, `attribute`, `bisect`, `canary`, `stress`, `report`, `capture`, `replay`, `purge`
    are all unbuilt — intentionally deferred past the narrow MVP slice.
-4. **Suite/config loading** — nothing parses `suites/*.yaml` or `jerald.yaml` yet; `TaskSpec`
+3. **Suite/config loading** — nothing parses `suites/*.yaml` or `jerald.yaml` yet; `TaskSpec`
    is currently always hand-constructed in tests.
-5. **SQLite store** — `src/jerald/store/` is an empty package; nothing is persisted yet.
-6. **`McpAdapter`** — the fourth production adapter named in the spec and in
+4. **SQLite store** — `src/jerald/store/` is an empty package; nothing is persisted yet.
+5. **`McpAdapter`** — the fourth production adapter named in the spec and in
    `docs/design/adapter-contract.md`'s registry note; not started, no design work done on it
    yet (what MCP client library, what transport, how `JERALD_TOOL_BASE_URL` fault injection
    applies to MCP tool calls specifically).
